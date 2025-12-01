@@ -18,6 +18,7 @@
     <style>
         body { background-color: #f0f2f5; touch-action: manipulation; font-family: 'Segoe UI', system-ui, sans-serif; }
         
+        /* Board Container Layout */
         .board-container {
             display: flex;
             justify-content: center;
@@ -32,12 +33,13 @@
         #board { 
             flex: 1; 
             width: 100%; 
-            /* Fix for shrinking: Min-height ensures it respects width */
-            min-height: 300px; 
+            min-height: 300px; /* Prevents shrinking */
+            aspect-ratio: 1 / 1;
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); 
             z-index: 10;
         }
 
+        /* Threat Map Overlay */
         #heatMapOverlay {
             position: absolute;
             top: 0; left: 36px; right: 0; bottom: 0;
@@ -49,6 +51,7 @@
         }
         .heat-square { width: 100%; height: 100%; transition: background-color 0.2s; }
 
+        /* Eval Bar */
         .eval-bar-container {
             flex: 0 0 24px;
             width: 24px;
@@ -66,6 +69,7 @@
         
         .piece-417db { background-size: 100%; }
 
+        /* Coach Box */
         .coach-box {
             background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
             border-left: 5px solid #cbd5e1;
@@ -111,6 +115,7 @@
         <div class="max-w-2xl mx-auto flex justify-between items-center">
             <h1 class="font-bold text-lg"><i class="fa-solid fa-chess"></i> Chess Coach AI</h1>
             <div class="flex gap-3 items-center">
+                <!-- Practice Mode Toggle -->
                 <div class="flex items-center gap-1 cursor-pointer" onclick="toggleRetryMode()" title="Practice Mode">
                     <div class="relative inline-block w-8 h-4 align-middle select-none transition duration-200 ease-in">
                         <input type="checkbox" name="toggle" id="retryToggle" class="toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-4 appearance-none cursor-pointer"/>
@@ -141,6 +146,8 @@
             </div>
             <div id="heatMapOverlay" class="hidden"></div>
             <div id="board" class="relative transition-shadow duration-300"></div>
+            
+            <!-- Analysis Overlay -->
             <div id="analysisOverlay" class="absolute inset-0 bg-white/95 z-20 hidden flex flex-col items-center justify-center rounded">
                 <button onclick="cancelAnalysis()" class="absolute top-2 right-2 text-gray-400 hover:text-red-500 p-2"><i class="fa-solid fa-times text-xl"></i></button>
                 <div id="statusTitle" class="text-indigo-600 font-bold mb-4 text-lg animate-pulse">Deep Analysis...</div>
@@ -148,6 +155,7 @@
                 <div id="progressText" class="text-xs text-gray-500 font-mono">Move 0/0</div>
                 <div id="geminiStatus" class="text-xs text-purple-600 mt-2 font-bold hidden">Generating Coach Commentary...</div>
             </div>
+            
             <div id="pvModeBadge" class="absolute top-2 right-2 bg-indigo-600 text-white text-xs px-3 py-1 rounded-full shadow-lg hidden pointer-events-none z-10 font-bold animate-bounce">Best Line Explorer</div>
             <div id="retryModeBadge" class="absolute top-2 right-2 bg-pink-600 text-white text-xs px-3 py-1 rounded-full shadow-lg hidden pointer-events-none z-10 font-bold animate-pulse">Practice Mode</div>
         </div>
@@ -171,6 +179,8 @@
         </div>
 
         <div id="coachBox" class="coach-box p-4 rounded-r-lg shadow-sm flex flex-col justify-center">
+            
+            <!-- 1. Normal Feedback State -->
             <div id="normalFeedback" class="normal-feedback">
                 <div id="feedbackPlaceholder" class="text-center text-gray-400 text-sm"><i class="fa-solid fa-comment-dots text-2xl mb-2"></i><br>Press "Review" to get AI coaching.</div>
                 <div id="feedbackContent" class="hidden">
@@ -191,6 +201,8 @@
                     </div>
                 </div>
             </div>
+
+            <!-- 2. PV Review State -->
             <div id="pvControls" class="pv-controls-container hidden">
                 <div class="flex justify-between items-center mb-2 border-b border-indigo-200 pb-2">
                     <span class="text-xs font-bold text-indigo-700 uppercase tracking-wider">Correcting the Line</span>
@@ -203,6 +215,8 @@
                     <button onclick="nextPvMove()" class="p-2 text-gray-600 hover:text-indigo-600 hover:bg-gray-50 rounded w-10"><i class="fa-solid fa-chevron-right"></i></button>
                 </div>
             </div>
+
+            <!-- 3. Retry/Practice State -->
             <div id="retryFeedback" class="hidden flex-col gap-2 items-center justify-center h-full">
                 <div class="text-pink-600 font-bold text-lg"><i class="fa-solid fa-puzzle-piece"></i> Spot the Mistake</div>
                 <div class="text-sm text-gray-600 text-center" id="retryMessage">You made a mistake here. Can you find the move Stockfish preferred?</div>
@@ -416,9 +430,7 @@
                 const response = await fetch(url, { signal: controller.signal });
                 clearTimeout(id);
                 return response;
-            } catch (e) {
-                return null;
-            }
+            } catch (e) { return null; }
         }
 
         async function fetchOpeningData(fen) {
