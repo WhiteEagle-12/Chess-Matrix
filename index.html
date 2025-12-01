@@ -112,9 +112,14 @@
     <nav class="bg-indigo-700 text-white p-3 shadow-md sticky top-0 z-50">
         <div class="max-w-2xl mx-auto flex justify-between items-center">
             <h1 class="font-bold text-lg"><i class="fa-solid fa-chess"></i> Chess Coach AI</h1>
-            <button onclick="openSettings()" class="text-white hover:text-indigo-200">
-                <i class="fa-solid fa-gear"></i>
-            </button>
+            <div class="flex gap-2">
+                <button onclick="flipBoard()" class="text-white hover:text-indigo-200" title="Flip Board">
+                    <i class="fa-solid fa-retweet"></i>
+                </button>
+                <button onclick="openSettings()" class="text-white hover:text-indigo-200">
+                    <i class="fa-solid fa-gear"></i>
+                </button>
+            </div>
         </div>
     </nav>
 
@@ -156,14 +161,32 @@
         </div>
 
         <!-- Navigation Bar -->
-        <div class="grid grid-cols-5 gap-2">
-            <button onclick="goToStart()" class="bg-white p-2 rounded shadow text-gray-600 hover:bg-gray-50"><i class="fa-solid fa-angles-left"></i></button>
-            <button onclick="prevMove()" class="bg-white p-2 rounded shadow text-gray-600 hover:bg-gray-50"><i class="fa-solid fa-angle-left"></i></button>
-            <button onclick="startAnalysis()" id="analyzeBtn" class="bg-indigo-600 text-white font-bold p-2 rounded shadow hover:bg-indigo-700 flex justify-center items-center gap-2">
-                <i class="fa-solid fa-wand-magic-sparkles"></i> Review
-            </button>
-            <button onclick="nextMove()" class="bg-white p-2 rounded shadow text-gray-600 hover:bg-gray-50"><i class="fa-solid fa-angle-right"></i></button>
-            <button onclick="goToEnd()" class="bg-white p-2 rounded shadow text-gray-600 hover:bg-gray-50"><i class="fa-solid fa-angles-right"></i></button>
+        <div class="flex flex-col gap-2">
+            <!-- Main Nav -->
+            <div class="grid grid-cols-5 gap-2">
+                <button onclick="goToStart()" class="bg-white p-2 rounded shadow text-gray-600 hover:bg-gray-50"><i class="fa-solid fa-angles-left"></i></button>
+                <button onclick="prevMove()" class="bg-white p-2 rounded shadow text-gray-600 hover:bg-gray-50"><i class="fa-solid fa-angle-left"></i></button>
+                
+                <!-- Review Button Group -->
+                <div class="relative group">
+                    <button onclick="startAnalysis()" id="analyzeBtn" class="w-full h-full bg-indigo-600 text-white font-bold p-2 rounded shadow hover:bg-indigo-700 flex justify-center items-center gap-2">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i> Review
+                    </button>
+                </div>
+
+                <button onclick="nextMove()" class="bg-white p-2 rounded shadow text-gray-600 hover:bg-gray-50"><i class="fa-solid fa-angle-right"></i></button>
+                <button onclick="goToEnd()" class="bg-white p-2 rounded shadow text-gray-600 hover:bg-gray-50"><i class="fa-solid fa-angles-right"></i></button>
+            </div>
+            
+            <!-- Analysis Options -->
+            <div class="flex justify-end items-center gap-2 text-xs text-gray-600">
+                <span class="font-bold">Coach Focus:</span>
+                <select id="analysisFocus" class="border rounded p-1 bg-white">
+                    <option value="both">Both Sides</option>
+                    <option value="w">White (My Moves)</option>
+                    <option value="b">Black (My Moves)</option>
+                </select>
+            </div>
         </div>
 
         <!-- Coach Feedback Box -->
@@ -276,6 +299,16 @@
             });
             window.addEventListener('resize', board.resize);
         }
+        
+        function flipBoard() {
+            if(board) {
+                board.flip();
+                // Update eval bar logic? 
+                // Currently Eval Bar is Absolute: White on top (usually), 
+                // but visual bar is Absolute White/Black colors.
+                // We keep Eval Bar standard.
+            }
+        }
 
         // --- 2. STOCKFISH ENGINE ---
         function initStockfish() {
@@ -318,6 +351,7 @@
                     game.reset();
                     currentMoveIndex = -1;
                     board.position(game.fen());
+                    board.orientation('white'); // Reset orientation on load
                     
                     analysisData = [];
                     geminiComments = {};
@@ -478,6 +512,8 @@
                 openSettings();
                 return; 
             }
+            
+            const focus = document.getElementById('analysisFocus').value; // 'both', 'w', 'b'
 
             isAnalyzing = true;
             const overlay = document.getElementById('analysisOverlay');
@@ -548,7 +584,7 @@
                         san: move.san,
                         color: move.color,
                         classification: classification,
-                        fen: tempGame.fen() // Capture FEN for Context
+                        fen: tempGame.fen()
                     });
                 }
 
@@ -560,7 +596,7 @@
                 document.getElementById('progressText').innerText = "AI is writing commentary...";
                 document.getElementById('progressBar').className = "h-full bg-purple-500 transition-all duration-300 animate-pulse";
                 
-                await getGeminiCommentary(apiKey);
+                await getGeminiCommentary(apiKey, focus);
 
             } catch (err) {
                 console.error("Analysis failed:", err);
@@ -631,33 +667,46 @@
         }
 
         // --- 7. GEMINI API (JSON MODE) ---
-        async function getGeminiCommentary(apiKey) {
+        async function getGeminiCommentary(apiKey, focus) {
             let gameLog = "";
             analysisData.forEach((d, i) => {
-                // We send FEN for ALL moves now to give context, but instruct model to be concise
-                // for standard moves.
-                gameLog += `Move ${i+1}: ${d.san} (Eval: ${d.eval}, Class: ${d.classification}, Better: ${d.bestMoveSan}) FEN: ${d.fen}\n`;
+                // If focus is specific, we still send context but maybe highlight
+                const isRelevant = focus === 'both' || focus === d.color;
+                
+                if(isRelevant) {
+                    if(d.classification === "Mistake" || d.classification === "Blunder" || d.classification === "Best" || i % 5 === 0) {
+                        const fenContext = (d.classification === "Mistake" || d.classification === "Blunder") ? `\n   FEN: ${d.fen}` : "";
+                        gameLog += `Move ${i+1} (${d.color}): ${d.san} (Eval: ${d.eval}, Class: ${d.classification}, Better: ${d.bestMoveSan})${fenContext}\n`;
+                    }
+                } else {
+                     // For opponent moves, just log basics for context
+                     gameLog += `Move ${i+1} (${d.color}): ${d.san} (Eval: ${d.eval})\n`;
+                }
             });
 
             if(!gameLog) gameLog = "Game was very balanced.";
+            
+            let focusInstruction = "Analyze both sides equally.";
+            if(focus === 'w') focusInstruction = "The user played WHITE. Focus entirely on White's decisions. Ignore Black's mistakes except to point out opportunities White missed. Be a coach specifically for White.";
+            if(focus === 'b') focusInstruction = "The user played BLACK. Focus entirely on Black's decisions. Ignore White's mistakes except to point out opportunities Black missed. Be a coach specifically for Black.";
 
             const prompt = `
             You are a Grandmaster Chess Coach. I am providing the entire game history with FEN strings.
+            ${focusInstruction}
 
             **INSTRUCTION PROTOCOL:**
             1. **VERBOSITY CONTROL (CRITICAL):**
-               - **"Book", "Neutral", "Good" Moves:** Be EXTREMELY concise. Max 5 words. (e.g., "Developing the bishop.", "Controlling the center.", "Solid response."). DO NOT elaborate.
+               - **"Book", "Neutral", "Good" Moves:** Be EXTREMELY concise. Max 5 words. (e.g., "Developing the bishop.", "Solid response.").
                - **"Mistake", "Blunder", "Best" Moves:** You MUST provide detailed, helpful feedback (2-3 sentences).
             
             2. **FEN ANALYSIS (CRITICAL for Mistakes/Blunders):**
-               - Don't just look at the move notation. **Look at the FEN board state.**
-               - Identify **GEOMETRIC PATTERNS**: Are pieces on the same rank/file/diagonal? (Pins/Skewers).
-               - Identify **UNDEFENDED PIECES**: Is a piece hanging?
-               - Identify **KING SAFETY**: Is the King open?
+               - **Look at the FEN board state.**
+               - Identify **GEOMETRIC PATTERNS**: (Pins/Skewers/Forks).
+               - Identify **UNDEFENDED PIECES**.
+               - Identify **KING SAFETY**.
                - Explain the mistake using these visual observations.
-               - Example: "Blunder. The FEN shows your Queen and King are on the same diagonal (d1-h5), allowing Bg4 pinning the Queen."
             
-            3. **OPENING RECOGNITION:** - If the first few moves match a known opening (Sicilian, Ruy Lopez, Queens Gambit), mention it in Move 1 or 2 comments.
+            3. **OPENING RECOGNITION:** - Mention the opening name if known.
 
             **Game Data:**
             ${gameLog}
@@ -665,8 +714,7 @@
             **Output JSON Format:**
             {
                 "1": "Standard e4 opening.",
-                "12": "Mistake. The FEN shows your King is exposed. This move allows Qh4+ leading to material loss.",
-                "25": "Brilliant! You spotted the weak back rank."
+                "12": "Mistake. The FEN shows your King is exposed. This move allows Qh4+ leading to material loss."
             }
             `;
 
