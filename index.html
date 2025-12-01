@@ -82,11 +82,14 @@
             background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
             border-left: 5px solid #cbd5e1;
             transition: all 0.3s ease;
+            position: relative;
         }
         .coach-box.best { border-left-color: #22c55e; background: #f0fdf4; }
         .coach-box.good { border-left-color: #84cc16; }
-        .coach-box.mistake { border-left-color: #f59e0b; background: #fffbeb; }
-        .coach-box.blunder { border-left-color: #ef4444; background: #fef2f2; }
+        .coach-box.inaccuracy { border-left-color: #facc15; background: #fefce8; } /* Yellow */
+        .coach-box.mistake { border-left-color: #f97316; background: #fff7ed; } /* Orange */
+        .coach-box.miss { border-left-color: #f43f5e; background: #fff1f2; } /* Pink/Red */
+        .coach-box.blunder { border-left-color: #dc2626; background: #fef2f2; } /* Red */
         .coach-box.book { border-left-color: #a855f7; }
 
         .classification-badge {
@@ -95,8 +98,10 @@
         }
         .bg-best { background-color: #22c55e; }
         .bg-good { background-color: #84cc16; }
-        .bg-mistake { background-color: #f59e0b; }
-        .bg-blunder { background-color: #ef4444; }
+        .bg-inaccuracy { background-color: #eab308; color: #fff; }
+        .bg-mistake { background-color: #f97316; }
+        .bg-miss { background-color: #f43f5e; }
+        .bg-blunder { background-color: #dc2626; }
         .bg-book { background-color: #a855f7; }
         .bg-neutral { background-color: #94a3b8; }
 
@@ -104,6 +109,16 @@
         ::-webkit-scrollbar-track { background: #f1f1f1; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        /* Animating Line Indicator */
+        .playing-line {
+            animation: pulse-border 1s infinite;
+        }
+        @keyframes pulse-border {
+            0% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.4); }
+            70% { box-shadow: 0 0 0 6px rgba(99, 102, 241, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+        }
     </style>
 </head>
 <body class="pb-12">
@@ -144,7 +159,7 @@
             </div>
 
             <!-- Chess Board -->
-            <div id="board"></div>
+            <div id="board" class="relative"></div>
             
             <!-- Analysis Overlay -->
             <div id="analysisOverlay" class="absolute inset-0 bg-white/95 z-20 hidden flex flex-col items-center justify-center rounded">
@@ -157,6 +172,11 @@
                 </div>
                 <div id="progressText" class="text-xs text-gray-500 font-mono">Move 0/0</div>
                 <div id="geminiStatus" class="text-xs text-purple-600 mt-2 font-bold hidden">Generating Coach Commentary...</div>
+            </div>
+            
+            <!-- Best Line Overlay (When animating) -->
+            <div id="bestLineOverlay" class="absolute top-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded hidden pointer-events-none z-10">
+                Playing Best Line...
             </div>
         </div>
 
@@ -202,8 +222,15 @@
                     <span id="moveNumber" class="text-xs text-gray-400 font-mono">1. e4</span>
                 </div>
                 <div id="coachText" class="text-sm text-gray-800 leading-relaxed font-medium"></div>
-                <div id="bestMoveSuggestion" class="text-xs text-gray-500 mt-3 pt-2 border-t border-gray-200">
-                    <!-- Engine suggestion goes here -->
+                
+                <!-- Engine Suggestions -->
+                <div id="bestMoveSuggestion" class="hidden mt-3 pt-2 border-t border-gray-200/50">
+                    <div class="text-xs text-gray-500 flex justify-between items-center">
+                         <span>Best was: <b id="bestMoveText"></b></span>
+                         <button onclick="playBestLine()" id="showLineBtn" class="bg-indigo-100 text-indigo-700 px-2 py-1 rounded text-xs font-bold hover:bg-indigo-200 transition-colors">
+                            <i class="fa-solid fa-play"></i> Show Best Line
+                         </button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -266,9 +293,10 @@
         let stockfish = null;
         let gameHistory = []; 
         let currentMoveIndex = -1; 
-        let analysisData = []; 
+        let analysisData = []; // Stores eval, classification, PV (line)
         let geminiComments = {}; 
         let isAnalyzing = false;
+        let isPlayingLine = false;
 
         // --- INIT ---
         window.addEventListener('DOMContentLoaded', () => {
@@ -280,7 +308,6 @@
                 openSettings();
             }
 
-            // Force resize
             setTimeout(() => {
                 if(board) board.resize();
             }, 300);
@@ -301,13 +328,7 @@
         }
         
         function flipBoard() {
-            if(board) {
-                board.flip();
-                // Update eval bar logic? 
-                // Currently Eval Bar is Absolute: White on top (usually), 
-                // but visual bar is Absolute White/Black colors.
-                // We keep Eval Bar standard.
-            }
+            if(board) board.flip();
         }
 
         // --- 2. STOCKFISH ENGINE ---
@@ -351,7 +372,7 @@
                     game.reset();
                     currentMoveIndex = -1;
                     board.position(game.fen());
-                    board.orientation('white'); // Reset orientation on load
+                    board.orientation('white'); 
                     
                     analysisData = [];
                     geminiComments = {};
@@ -375,6 +396,7 @@
 
         // --- 4. NAVIGATION ---
         function updateUI() {
+            if(isPlayingLine) return; // Don't update during animation
             board.position(game.fen());
             
             const turn = game.turn();
@@ -385,6 +407,7 @@
         }
 
         function nextMove() {
+            if(isPlayingLine) return;
             if (currentMoveIndex < gameHistory.length - 1) {
                 currentMoveIndex++;
                 game.move(gameHistory[currentMoveIndex]);
@@ -393,6 +416,7 @@
         }
 
         function prevMove() {
+            if(isPlayingLine) return;
             if (currentMoveIndex >= 0) {
                 game.undo();
                 currentMoveIndex--;
@@ -401,12 +425,14 @@
         }
 
         function goToStart() {
+            if(isPlayingLine) return;
             game.reset();
             currentMoveIndex = -1;
             updateUI();
         }
 
         function goToEnd() {
+            if(isPlayingLine) return;
             while (currentMoveIndex < gameHistory.length - 1) {
                 currentMoveIndex++;
                 game.move(gameHistory[currentMoveIndex]);
@@ -452,6 +478,8 @@
             const box = document.getElementById('coachBox');
             const badge = document.getElementById('moveClassBadge');
             const suggestionDiv = document.getElementById('bestMoveSuggestion');
+            const bestMoveText = document.getElementById('bestMoveText');
+            const showLineBtn = document.getElementById('showLineBtn');
 
             if (analysisData.length === 0) {
                 contentDiv.classList.add('hidden');
@@ -483,16 +511,28 @@
             if (!comment) {
                 if (data.classification === "Best") comment = "Excellent find! This is the top engine move.";
                 else if (data.classification === "Good") comment = "Solid move. Maintains the position.";
+                else if (data.classification === "Inaccuracy") comment = "Slight inaccuracy. There was a more precise move.";
                 else if (data.classification === "Mistake") comment = "This creates some problems. The evaluation dropped.";
+                else if (data.classification === "Miss") comment = "Missed opportunity to gain a significant advantage.";
                 else if (data.classification === "Blunder") comment = "A critical error! This loses significant material or position.";
                 else comment = "Standard book move.";
             }
             document.getElementById('coachText').innerHTML = marked.parse(comment);
             document.getElementById('moveNumber').innerText = moveNotation;
 
-            if (data.classification === "Mistake" || data.classification === "Blunder") {
-                suggestionDiv.innerHTML = `Better was: <b>${data.bestMoveSan || data.bestMove}</b>`;
+            // Show Best Move / Line feature for anything not "Best" or "Book"
+            const needsSuggestion = ["Inaccuracy", "Mistake", "Miss", "Blunder"].includes(data.classification);
+            
+            if (needsSuggestion && data.bestMoveSan) {
                 suggestionDiv.classList.remove('hidden');
+                bestMoveText.innerText = data.bestMoveSan;
+                // Only show "Show Line" button if we actually captured a line
+                if (data.pv && data.pv.length > 0) {
+                    showLineBtn.classList.remove('hidden');
+                    showLineBtn.onclick = () => playBestLine(data.pv, data.fenBefore);
+                } else {
+                    showLineBtn.classList.add('hidden');
+                }
             } else {
                 suggestionDiv.classList.add('hidden');
             }
@@ -513,7 +553,7 @@
                 return; 
             }
             
-            const focus = document.getElementById('analysisFocus').value; // 'both', 'w', 'b'
+            const focus = document.getElementById('analysisFocus').value; 
 
             isAnalyzing = true;
             const overlay = document.getElementById('analysisOverlay');
@@ -525,7 +565,6 @@
             document.getElementById('progressBar').className = "h-full bg-indigo-500 transition-all duration-300";
 
             const tempGame = new Chess();
-            let evalBefore = 0.30; 
             analysisData = [];
 
             try {
@@ -539,14 +578,16 @@
                     document.getElementById('progressBar').style.width = pct + "%";
                     document.getElementById('progressText').innerText = `Stockfish: Move ${i+1}/${gameHistory.length}`;
 
-                    const preMoveResult = await runStockfish(tempGame.fen());
+                    // A. PRE-MOVE ANALYSIS (The "Best" Path)
+                    const fenBefore = tempGame.fen();
+                    const preMoveResult = await runStockfish(fenBefore);
                     
                     let bestMoveSan = preMoveResult.bestMove;
                     if(preMoveResult.bestMove && preMoveResult.bestMove !== '-') {
+                        // Quick SAN conversion
                         const from = preMoveResult.bestMove.substring(0,2);
                         const to = preMoveResult.bestMove.substring(2,4);
                         const promotion = preMoveResult.bestMove.length > 4 ? preMoveResult.bestMove.substring(4,5) : undefined;
-                        
                         const moveObj = tempGame.move({ from, to, promotion });
                         if(moveObj) {
                             bestMoveSan = moveObj.san;
@@ -556,24 +597,36 @@
 
                     let currentEvalBefore = parseEval(preMoveResult.eval, tempGame.turn());
 
+                    // B. MAKE ACTUAL MOVE
                     tempGame.move(move.san);
                     
+                    // C. POST-MOVE ANALYSIS
                     const postMoveResult = await runStockfish(tempGame.fen());
                     let currentEvalAfter = parseEval(postMoveResult.eval, tempGame.turn());
                     
+                    // Delta Calculation (White Perspective)
+                    // If White moved: We want EvalAfter >= EvalBefore. Delta = EvalAfter - EvalBefore.
+                    // If Black moved: We want EvalAfter <= EvalBefore. Delta = EvalBefore - EvalAfter.
                     let delta = 0;
                     if (move.color === 'w') {
                         delta = currentEvalAfter - currentEvalBefore;
                     } else {
-                        delta = currentEvalBefore - currentEvalAfter;
+                        delta = currentEvalBefore - currentEvalAfter; // Positive means Black improved/maintained
                     }
 
+                    // Strict Classification Logic
                     let classification = "Neutral";
-                    if (i < 8 && Math.abs(delta) > -0.5) classification = "Book"; 
-                    else if (delta > 0.5) classification = "Best"; 
-                    else if (delta > -0.5) classification = "Good";
-                    else if (delta > -2.0) classification = "Mistake";
-                    else classification = "Blunder";
+                    
+                    // Miss logic: If eval was winning (>1.5) and dropped significantly
+                    // Or if best move delta was much higher than played move delta?
+                    // Simplified Delta Thresholds:
+                    if (i < 8 && Math.abs(delta) > -0.3) classification = "Book"; 
+                    else if (delta > 0.3) classification = "Best"; // Improved position
+                    else if (delta > -0.2) classification = "Good";
+                    else if (delta > -0.6) classification = "Inaccuracy"; // -0.2 to -0.6
+                    else if (delta > -1.5) classification = "Mistake"; // -0.6 to -1.5
+                    else if (delta > -3.0) classification = "Miss"; // -1.5 to -3.0 (Often a missed win)
+                    else classification = "Blunder"; // < -3.0
 
                     if (move.san === bestMoveSan) classification = "Best";
                     
@@ -581,10 +634,12 @@
                         eval: currentEvalAfter.toFixed(2), 
                         bestMove: preMoveResult.bestMove,
                         bestMoveSan: bestMoveSan,
+                        pv: preMoveResult.pv, // Store the Principal Variation
                         san: move.san,
                         color: move.color,
                         classification: classification,
-                        fen: tempGame.fen()
+                        fen: tempGame.fen(),
+                        fenBefore: fenBefore
                     });
                 }
 
@@ -613,6 +668,48 @@
             }
         }
 
+        // --- 7. PLAY BEST LINE FEATURE ---
+        async function playBestLine(pv, startFen) {
+            if(!pv || isPlayingLine) return;
+            
+            // Lock UI
+            isPlayingLine = true;
+            document.getElementById('board').classList.add('playing-line');
+            document.getElementById('bestLineOverlay').classList.remove('hidden');
+            
+            // Setup Ghost Game
+            const ghostGame = new Chess(startFen);
+            const moves = pv.split(' ');
+            
+            // Animate
+            board.position(startFen);
+            await new Promise(r => setTimeout(r, 500));
+
+            for (let moveStr of moves) {
+                if (!isPlayingLine) break; // Allow exit
+                
+                // Parse UCI (e2e4) to SAN for chess.js or just loose move
+                const from = moveStr.substring(0,2);
+                const to = moveStr.substring(2,4);
+                const promotion = moveStr.length > 4 ? moveStr.substring(4,5) : 'q';
+                
+                const move = ghostGame.move({ from, to, promotion });
+                if(!move) break; 
+                
+                board.position(ghostGame.fen());
+                await new Promise(r => setTimeout(r, 800));
+            }
+            
+            // Reset
+            document.getElementById('board').classList.remove('playing-line');
+            document.getElementById('bestLineOverlay').classList.add('hidden');
+            isPlayingLine = false;
+            
+            // Return to actual game state
+            board.position(game.fen());
+        }
+
+        // --- HELPERS ---
         function parseEval(evalStr, turn) {
             if (typeof evalStr === 'string' && evalStr.startsWith('M')) {
                 return parseFloat(evalStr.replace('M', '')) > 0 ? 100 : -100; 
@@ -625,8 +722,8 @@
                 if (!stockfish) initStockfish();
 
                 const timeoutId = setTimeout(() => {
-                    resolve({ eval: "0.00", bestMove: "-" }); 
-                }, 2000); 
+                    resolve({ eval: "0.00", bestMove: "-", pv: "" }); 
+                }, 3000); // Increased timeout for PV calculation
 
                 stockfish.postMessage('stop');
                 stockfish.postMessage('position fen ' + fen);
@@ -634,9 +731,17 @@
 
                 let best = "-";
                 let evalScore = "0.00";
+                let pvLine = "";
 
                 const listener = (e) => {
                     const line = e.data;
+                    
+                    // Capture PV (Principal Variation)
+                    if (line.includes(' pv ')) {
+                        const parts = line.split(' pv ');
+                        if(parts[1]) pvLine = parts[1];
+                    }
+
                     if (line.includes('cp ')) {
                         const match = line.match(/cp (-?\d+)/);
                         if(match) {
@@ -659,27 +764,25 @@
                         clearTimeout(timeoutId); 
                         best = line.split(' ')[1]; 
                         stockfish.removeEventListener('message', listener);
-                        resolve({ eval: evalScore, bestMove: best }); 
+                        resolve({ eval: evalScore, bestMove: best, pv: pvLine }); 
                     }
                 };
                 stockfish.addEventListener('message', listener);
             });
         }
 
-        // --- 7. GEMINI API (JSON MODE) ---
+        // --- 8. GEMINI API ---
         async function getGeminiCommentary(apiKey, focus) {
             let gameLog = "";
             analysisData.forEach((d, i) => {
-                // If focus is specific, we still send context but maybe highlight
                 const isRelevant = focus === 'both' || focus === d.color;
                 
                 if(isRelevant) {
-                    if(d.classification === "Mistake" || d.classification === "Blunder" || d.classification === "Best" || i % 5 === 0) {
-                        const fenContext = (d.classification === "Mistake" || d.classification === "Blunder") ? `\n   FEN: ${d.fen}` : "";
-                        gameLog += `Move ${i+1} (${d.color}): ${d.san} (Eval: ${d.eval}, Class: ${d.classification}, Better: ${d.bestMoveSan})${fenContext}\n`;
+                    if(["Mistake", "Blunder", "Miss", "Inaccuracy", "Best"].includes(d.classification) || i % 5 === 0) {
+                        const context = `\n   FEN: ${d.fen}\n   Best Line: ${d.pv}`;
+                        gameLog += `Move ${i+1} (${d.color}): ${d.san} (Eval: ${d.eval}, Class: ${d.classification}, Better: ${d.bestMoveSan})${context}\n`;
                     }
                 } else {
-                     // For opponent moves, just log basics for context
                      gameLog += `Move ${i+1} (${d.color}): ${d.san} (Eval: ${d.eval})\n`;
                 }
             });
@@ -687,34 +790,31 @@
             if(!gameLog) gameLog = "Game was very balanced.";
             
             let focusInstruction = "Analyze both sides equally.";
-            if(focus === 'w') focusInstruction = "The user played WHITE. Focus entirely on White's decisions. Ignore Black's mistakes except to point out opportunities White missed. Be a coach specifically for White.";
-            if(focus === 'b') focusInstruction = "The user played BLACK. Focus entirely on Black's decisions. Ignore White's mistakes except to point out opportunities Black missed. Be a coach specifically for Black.";
+            if(focus === 'w') focusInstruction = "Player is WHITE. Focus entirely on White's decisions. Ignore Black's errors unless White missed a punisher.";
+            if(focus === 'b') focusInstruction = "Player is BLACK. Focus entirely on Black's decisions. Ignore White's errors unless Black missed a punisher.";
 
             const prompt = `
-            You are a Grandmaster Chess Coach. I am providing the entire game history with FEN strings.
+            You are a Grandmaster Chess Coach. 
             ${focusInstruction}
 
-            **INSTRUCTION PROTOCOL:**
-            1. **VERBOSITY CONTROL (CRITICAL):**
-               - **"Book", "Neutral", "Good" Moves:** Be EXTREMELY concise. Max 5 words. (e.g., "Developing the bishop.", "Solid response.").
-               - **"Mistake", "Blunder", "Best" Moves:** You MUST provide detailed, helpful feedback (2-3 sentences).
+            **INSTRUCTIONS:**
+            1. **CLASSIFICATION FEEDBACK:**
+               - **"Inaccuracy":** Be gentle. "Slightly passive," "Could be more precise."
+               - **"Mistake":** Explain the strategic error. "Weakens the pawn structure," "Allows piece activity."
+               - **"Miss":** HIGHLIGHT what was missed. "You missed a forced win!" "You missed a tactic to win a piece."
+               - **"Blunder":** Be strict. Explain the immediate tactical failure.
             
-            2. **FEN ANALYSIS (CRITICAL for Mistakes/Blunders):**
-               - **Look at the FEN board state.**
-               - Identify **GEOMETRIC PATTERNS**: (Pins/Skewers/Forks).
-               - Identify **UNDEFENDED PIECES**.
-               - Identify **KING SAFETY**.
-               - Explain the mistake using these visual observations.
-            
-            3. **OPENING RECOGNITION:** - Mention the opening name if known.
+            2. **USE THE BEST LINE (PV):**
+               - The data includes "Best Line" (PV) from the engine. 
+               - **EXPLAIN THIS LINE.** Tell the user *what* the board would look like if they played correctly.
+               - Example: "The engine wanted Ne5, looking to fork the Queen and Rook on the next turn."
 
             **Game Data:**
             ${gameLog}
 
             **Output JSON Format:**
             {
-                "1": "Standard e4 opening.",
-                "12": "Mistake. The FEN shows your King is exposed. This move allows Qh4+ leading to material loss."
+                "12": "Mistake. You allowed the Knight to outpost. The engine preferred playing c4 to challenge the center immediately."
             }
             `;
 
@@ -738,11 +838,11 @@
                 
             } catch (e) {
                 console.error("Gemini Error:", e);
-                geminiComments = { 1: "Analysis complete. Click through moves to see Engine suggestions." };
+                geminiComments = { 1: "Analysis complete." };
             }
         }
 
-        // --- 8. CHAT ---
+        // --- 9. CHAT ---
         async function sendChatMessage() {
             const input = document.getElementById('chatInput');
             const text = input.value;
@@ -762,8 +862,7 @@
             Current Move Index: ${currentMoveIndex} (Move ${Math.floor(currentMoveIndex/2)+1})
             User Question: ${text}
             
-            Answer as a Chess Coach. Use the FEN to describe specific piece locations (e.g. "Your Knight on f3").
-            Focus on strategic concepts (weak squares, piece activity) and tactics.
+            Answer as a Chess Coach. Use the FEN to describe specific piece locations.
             `;
 
             try {
@@ -789,19 +888,8 @@
         function saveSettings() {
             const key = document.getElementById('apiKeyInput').value.trim();
             if(!key) { alert("Please enter a key."); return; }
-            
             localStorage.setItem('gemini_api_key', key);
-            
-            const btn = document.getElementById('saveKeyBtn');
-            const originalText = btn.innerText;
-            btn.innerText = "Saved!";
-            btn.classList.replace('bg-indigo-600', 'bg-green-600');
-            
-            setTimeout(() => {
-                document.getElementById('settingsModal').classList.add('hidden');
-                btn.innerText = originalText;
-                btn.classList.replace('bg-green-600', 'bg-indigo-600');
-            }, 1000);
+            document.getElementById('settingsModal').classList.add('hidden');
         }
 
         function loadSettings() {
