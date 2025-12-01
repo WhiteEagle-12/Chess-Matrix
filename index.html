@@ -634,37 +634,38 @@
         async function getGeminiCommentary(apiKey) {
             let gameLog = "";
             analysisData.forEach((d, i) => {
-                if(d.classification === "Mistake" || d.classification === "Blunder" || d.classification === "Best" || i % 5 === 0) {
-                    // Send FEN context only for critical errors or every few moves
-                    const fenContext = (d.classification === "Mistake" || d.classification === "Blunder") ? `\n   FEN: ${d.fen}` : "";
-                    gameLog += `Move ${i+1}: ${d.san} (Eval: ${d.eval}, Class: ${d.classification}, Better: ${d.bestMoveSan})${fenContext}\n`;
-                }
+                // We send FEN for ALL moves now to give context, but instruct model to be concise
+                // for standard moves.
+                gameLog += `Move ${i+1}: ${d.san} (Eval: ${d.eval}, Class: ${d.classification}, Better: ${d.bestMoveSan}) FEN: ${d.fen}\n`;
             });
 
             if(!gameLog) gameLog = "Game was very balanced.";
 
             const prompt = `
-            You are a Grandmaster Chess Coach. I will provide moves, engine evals, and FEN strings for critical moments.
+            You are a Grandmaster Chess Coach. I am providing the entire game history with FEN strings.
+
+            **INSTRUCTION PROTOCOL:**
+            1. **VERBOSITY CONTROL (CRITICAL):**
+               - **"Book", "Neutral", "Good" Moves:** Be EXTREMELY concise. Max 5 words. (e.g., "Developing the bishop.", "Controlling the center.", "Solid response."). DO NOT elaborate.
+               - **"Mistake", "Blunder", "Best" Moves:** You MUST provide detailed, helpful feedback (2-3 sentences).
             
-            **YOUR GOAL:**
-            Provide high-level, instructive feedback. Don't just say a move is bad; explain the **CHESS PRINCIPLE** violated or the **TACTICAL MOTIF** missed.
+            2. **FEN ANALYSIS (CRITICAL for Mistakes/Blunders):**
+               - Don't just look at the move notation. **Look at the FEN board state.**
+               - Identify **GEOMETRIC PATTERNS**: Are pieces on the same rank/file/diagonal? (Pins/Skewers).
+               - Identify **UNDEFENDED PIECES**: Is a piece hanging?
+               - Identify **KING SAFETY**: Is the King open?
+               - Explain the mistake using these visual observations.
+               - Example: "Blunder. The FEN shows your Queen and King are on the same diagonal (d1-h5), allowing Bg4 pinning the Queen."
             
-            **INSTRUCTIONS:**
-            1. **Analyze the FEN:** For Blunders, use the FEN to see the board. Mention static features like "Back Rank weakness", "Open h-file", "Pin on the Knight", "Isolated Queen Pawn".
-            2. **Identify Openings:** If you recognize the opening moves, mention it (e.g., "You entered the Ruy Lopez").
-            3. **Be Specific:**
-               - Bad: "You lost advantage."
-               - Good: "This move allows Black to create a passed pawn on the d-file."
-               - Good: "You missed a fork on c7."
-            4. **Format:** JSON Object. Key = Move Number. Value = Commentary.
+            3. **OPENING RECOGNITION:** - If the first few moves match a known opening (Sicilian, Ruy Lopez, Queens Gambit), mention it in Move 1 or 2 comments.
 
             **Game Data:**
             ${gameLog}
 
-            **Output JSON Example:**
+            **Output JSON Format:**
             {
                 "1": "Standard e4 opening.",
-                "12": "Mistake. The FEN shows your King is exposed on the g-file. This move allows Qh4+ leading to mate.",
+                "12": "Mistake. The FEN shows your King is exposed. This move allows Qh4+ leading to material loss.",
                 "25": "Brilliant! You spotted the weak back rank."
             }
             `;
