@@ -18,7 +18,6 @@
     <style>
         body { background-color: #f0f2f5; touch-action: manipulation; font-family: 'Segoe UI', system-ui, sans-serif; }
         
-        /* Board Container Layout */
         .board-container {
             display: flex;
             justify-content: center;
@@ -27,20 +26,33 @@
             width: 100%;
             max-width: 480px;
             margin: 0 auto;
+            position: relative;
         }
 
         #board { 
             flex: 1; 
             min-width: 0; 
             width: 100%; 
+            aspect-ratio: 1 / 1;
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); 
+            z-index: 10;
         }
 
-        /* Eval Bar Styles */
+        #heatMapOverlay {
+            position: absolute;
+            top: 0; left: 36px; right: 0; bottom: 0;
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            grid-template-rows: repeat(8, 1fr);
+            pointer-events: none; 
+            z-index: 20; 
+        }
+        .heat-square { width: 100%; height: 100%; transition: background-color 0.2s; }
+
         .eval-bar-container {
             flex: 0 0 24px;
             width: 24px;
-            background-color: #374151; /* Dark gray background (Black winning) */
+            background-color: #374151;
             border-radius: 4px;
             overflow: hidden;
             position: relative;
@@ -48,48 +60,22 @@
             display: flex;
             flex-direction: column-reverse;
         }
-
-        .eval-bar-fill {
-            width: 100%;
-            background-color: #ffffff; /* White foreground (White winning) */
-            height: 50%;
-            transition: height 0.5s ease-out;
-            border-top: 1px solid #9ca3af;
-        }
-
-        .eval-score-text {
-            position: absolute;
-            width: 100%;
-            text-align: center;
-            font-size: 9px;
-            font-weight: bold;
-            color: #999;
-            z-index: 10;
-            top: 4px;
-            pointer-events: none;
-            text-shadow: 0 1px 2px rgba(0,0,0,0.8);
-        }
-        .eval-score-text.bottom {
-            top: auto;
-            bottom: 4px;
-            color: #ccc;
-        }
+        .eval-bar-fill { width: 100%; background-color: #ffffff; height: 50%; transition: height 0.5s ease-out; border-top: 1px solid #9ca3af; }
+        .eval-score-text { position: absolute; width: 100%; text-align: center; font-size: 9px; font-weight: bold; color: #999; z-index: 10; top: 4px; pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,0.8); }
+        .eval-score-text.bottom { top: auto; bottom: 4px; color: #ccc; }
         
         .piece-417db { background-size: 100%; }
 
-        /* Coach Box Styles */
+        /* Coach Box */
         .coach-box {
             background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
             border-left: 5px solid #cbd5e1;
             transition: all 0.3s ease;
             position: relative;
-            min-height: 160px; /* Ensure space for PV mode */
+            min-height: 170px;
         }
-        /* Mode: PV Review Active */
-        .coach-box.pv-active {
-            border-left-color: #6366f1; /* Indigo */
-            background: #eef2ff;
-        }
+        .coach-box.pv-active { border-left-color: #6366f1; background: #eef2ff; }
+        .coach-box.retry-active { border-left-color: #ec4899; background: #fdf2f8; }
 
         .coach-box.best { border-left-color: #22c55e; background: #f0fdf4; }
         .coach-box.good { border-left-color: #84cc16; }
@@ -99,10 +85,7 @@
         .coach-box.blunder { border-left-color: #dc2626; background: #fef2f2; } 
         .coach-box.book { border-left-color: #a855f7; }
 
-        .classification-badge {
-            font-size: 0.7rem; text-transform: uppercase; font-weight: 800; letter-spacing: 0.05em;
-            padding: 2px 6px; border-radius: 4px; color: white; display: inline-block; margin-bottom: 4px;
-        }
+        .classification-badge { font-size: 0.65rem; text-transform: uppercase; font-weight: 800; letter-spacing: 0.05em; padding: 2px 6px; border-radius: 4px; color: white; display: inline-block; margin-bottom: 2px; }
         .bg-best { background-color: #22c55e; }
         .bg-good { background-color: #84cc16; }
         .bg-inaccuracy { background-color: #eab308; color: #fff; }
@@ -112,24 +95,29 @@
         .bg-book { background-color: #a855f7; }
         .bg-neutral { background-color: #94a3b8; }
 
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: #f1f1f1; }
-        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-        
-        /* PV Mode Styles */
-        .pv-controls-container {
-            display: none;
-            flex-direction: column;
-            height: 100%;
-            justify-content: space-between;
+        /* Plan Badge */
+        .plan-badge {
+            background-color: #e0e7ff;
+            color: #4338ca;
+            font-size: 0.65rem;
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 4px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            border: 1px solid #c7d2fe;
         }
+
+        .toggle-checkbox:checked { right: 0; border-color: #68D391; }
+        .toggle-checkbox:checked + .toggle-label { background-color: #68D391; }
+        .board-pv-highlight { box-shadow: 0 0 0 4px #6366f1 !important; }
+        .board-retry-highlight { box-shadow: 0 0 0 4px #ec4899 !important; }
+        .hidden { display: none !important; }
+        
+        .pv-controls-container { display: none; flex-direction: column; height: 100%; justify-content: space-between; }
         .pv-active .pv-controls-container { display: flex; }
         .pv-active .normal-feedback { display: none; }
-        
-        .board-pv-highlight {
-            box-shadow: 0 0 0 4px #6366f1 !important;
-        }
     </style>
 </head>
 <body class="pb-12">
@@ -138,20 +126,21 @@
     <nav class="bg-indigo-700 text-white p-3 shadow-md sticky top-0 z-50">
         <div class="max-w-2xl mx-auto flex justify-between items-center">
             <h1 class="font-bold text-lg"><i class="fa-solid fa-chess"></i> Chess Coach AI</h1>
-            <div class="flex gap-2">
-                <button onclick="flipBoard()" class="text-white hover:text-indigo-200" title="Flip Board">
-                    <i class="fa-solid fa-retweet"></i>
-                </button>
-                <button onclick="openSettings()" class="text-white hover:text-indigo-200">
-                    <i class="fa-solid fa-gear"></i>
-                </button>
+            <div class="flex gap-3 items-center">
+                <div class="flex items-center gap-1 cursor-pointer" onclick="toggleRetryMode()" title="Practice Mode">
+                    <div class="relative inline-block w-8 h-4 align-middle select-none transition duration-200 ease-in">
+                        <input type="checkbox" name="toggle" id="retryToggle" class="toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-4 appearance-none cursor-pointer"/>
+                        <label for="toggle" class="toggle-label block overflow-hidden h-4 rounded-full bg-indigo-900 cursor-pointer"></label>
+                    </div>
+                    <span class="text-xs font-bold"><i class="fa-solid fa-graduation-cap"></i></span>
+                </div>
+                <button onclick="flipBoard()" class="text-white hover:text-indigo-200"><i class="fa-solid fa-retweet"></i></button>
+                <button onclick="openSettings()" class="text-white hover:text-indigo-200"><i class="fa-solid fa-gear"></i></button>
             </div>
         </div>
     </nav>
 
     <div class="max-w-2xl mx-auto p-4 flex flex-col gap-4">
-
-        <!-- Controls / Status -->
         <div class="flex justify-between items-center bg-white p-3 rounded-lg shadow-sm">
             <div class="flex items-center gap-3">
                 <div id="turnIndicator" class="w-3 h-3 rounded-full bg-white border-2 border-black"></div>
@@ -160,56 +149,33 @@
             <div id="evalText" class="font-mono text-sm bg-gray-800 text-yellow-400 px-2 py-1 rounded">0.00</div>
         </div>
 
-        <!-- Board Area with Eval Bar -->
         <div class="relative board-container">
-            <!-- Eval Bar -->
             <div class="eval-bar-container">
                 <div class="eval-score-text" id="evalBarTextTop"></div>
                 <div id="visualEvalBar" class="eval-bar-fill" style="height: 50%;"></div>
                 <div class="eval-score-text bottom" id="evalBarTextBottom"></div>
             </div>
-
-            <!-- Chess Board -->
+            <div id="heatMapOverlay" class="hidden"></div>
             <div id="board" class="relative transition-shadow duration-300"></div>
-            
-            <!-- Analysis Overlay -->
             <div id="analysisOverlay" class="absolute inset-0 bg-white/95 z-20 hidden flex flex-col items-center justify-center rounded">
-                <button onclick="cancelAnalysis()" class="absolute top-2 right-2 text-gray-400 hover:text-red-500 p-2">
-                    <i class="fa-solid fa-times text-xl"></i>
-                </button>
-                <div id="statusTitle" class="text-indigo-600 font-bold mb-4 text-lg animate-pulse">Analyzing with Stockfish...</div>
-                <div class="w-64 h-3 bg-gray-200 rounded-full overflow-hidden mb-2">
-                    <div id="progressBar" class="h-full bg-indigo-500 transition-all duration-300" style="width: 0%"></div>
-                </div>
+                <button onclick="cancelAnalysis()" class="absolute top-2 right-2 text-gray-400 hover:text-red-500 p-2"><i class="fa-solid fa-times text-xl"></i></button>
+                <div id="statusTitle" class="text-indigo-600 font-bold mb-4 text-lg animate-pulse">Deep Analysis...</div>
+                <div class="w-64 h-3 bg-gray-200 rounded-full overflow-hidden mb-2"><div id="progressBar" class="h-full bg-indigo-500 transition-all duration-300" style="width: 0%"></div></div>
                 <div id="progressText" class="text-xs text-gray-500 font-mono">Move 0/0</div>
                 <div id="geminiStatus" class="text-xs text-purple-600 mt-2 font-bold hidden">Generating Coach Commentary...</div>
             </div>
-            
-            <!-- PV Mode Badge -->
-            <div id="pvModeBadge" class="absolute top-2 right-2 bg-indigo-600 text-white text-xs px-3 py-1 rounded-full shadow-lg hidden pointer-events-none z-10 font-bold animate-bounce">
-                Best Line Explorer
-            </div>
+            <div id="pvModeBadge" class="absolute top-2 right-2 bg-indigo-600 text-white text-xs px-3 py-1 rounded-full shadow-lg hidden pointer-events-none z-10 font-bold animate-bounce">Best Line Explorer</div>
+            <div id="retryModeBadge" class="absolute top-2 right-2 bg-pink-600 text-white text-xs px-3 py-1 rounded-full shadow-lg hidden pointer-events-none z-10 font-bold animate-pulse">Practice Mode</div>
         </div>
 
-        <!-- Navigation Bar -->
         <div class="flex flex-col gap-2">
-            <!-- Main Nav -->
             <div class="grid grid-cols-5 gap-2" id="mainNavButtons">
                 <button onclick="goToStart()" class="bg-white p-2 rounded shadow text-gray-600 hover:bg-gray-50"><i class="fa-solid fa-angles-left"></i></button>
                 <button onclick="prevMove()" class="bg-white p-2 rounded shadow text-gray-600 hover:bg-gray-50"><i class="fa-solid fa-angle-left"></i></button>
-                
-                <!-- Review Button Group -->
-                <div class="relative group">
-                    <button onclick="startAnalysis()" id="analyzeBtn" class="w-full h-full bg-indigo-600 text-white font-bold p-2 rounded shadow hover:bg-indigo-700 flex justify-center items-center gap-2">
-                        <i class="fa-solid fa-wand-magic-sparkles"></i> Review
-                    </button>
-                </div>
-
+                <button onclick="startAnalysis()" id="analyzeBtn" class="bg-indigo-600 text-white font-bold p-2 rounded shadow hover:bg-indigo-700 flex justify-center items-center gap-2"><i class="fa-solid fa-wand-magic-sparkles"></i> Review</button>
                 <button onclick="nextMove()" class="bg-white p-2 rounded shadow text-gray-600 hover:bg-gray-50"><i class="fa-solid fa-angle-right"></i></button>
                 <button onclick="goToEnd()" class="bg-white p-2 rounded shadow text-gray-600 hover:bg-gray-50"><i class="fa-solid fa-angles-right"></i></button>
             </div>
-            
-            <!-- Analysis Options -->
             <div class="flex justify-end items-center gap-2 text-xs text-gray-600" id="analysisOptions">
                 <span class="font-bold">Coach Focus:</span>
                 <select id="analysisFocus" class="border rounded p-1 bg-white">
@@ -220,94 +186,78 @@
             </div>
         </div>
 
-        <!-- Coach Feedback Box -->
         <div id="coachBox" class="coach-box p-4 rounded-r-lg shadow-sm flex flex-col justify-center">
-            
-            <!-- 1. Normal Feedback State -->
-            <div class="normal-feedback">
-                <div id="feedbackPlaceholder" class="text-center text-gray-400 text-sm">
-                    <i class="fa-solid fa-comment-dots text-2xl mb-2"></i><br>
-                    Press "Review" to get AI coaching.
-                </div>
-                
+            <div id="normalFeedback" class="normal-feedback">
+                <div id="feedbackPlaceholder" class="text-center text-gray-400 text-sm"><i class="fa-solid fa-comment-dots text-2xl mb-2"></i><br>Press "Review" to get AI coaching.</div>
                 <div id="feedbackContent" class="hidden">
                     <div class="flex justify-between items-start mb-2">
-                        <span id="moveClassBadge" class="classification-badge bg-neutral">Neutral</span>
-                        <span id="moveNumber" class="text-xs text-gray-400 font-mono">1. e4</span>
-                    </div>
-                    <div id="coachText" class="text-sm text-gray-800 leading-relaxed font-medium"></div>
-                    
-                    <!-- Engine Suggestions Link -->
-                    <div id="bestMoveSuggestion" class="hidden mt-3 pt-3 border-t border-gray-200/50 flex flex-col gap-2">
-                        <div class="text-xs text-gray-500">
-                             Best was: <b id="bestMoveText"></b>
+                        <div class="flex flex-col items-start gap-1">
+                            <span id="moveClassBadge" class="classification-badge bg-neutral">Neutral</span>
+                            <!-- Strategic Plan Badge -->
+                            <span id="strategicPlan" class="plan-badge hidden"><i class="fa-solid fa-bullseye"></i> <span id="planText">Development</span></span>
                         </div>
-                        <button onclick="startPvReview()" class="w-full bg-indigo-50 text-indigo-700 px-3 py-2 rounded text-xs font-bold hover:bg-indigo-100 transition-colors flex items-center justify-center gap-2 border border-indigo-200">
-                            <i class="fa-solid fa-chess-board"></i> Explore Best Line
-                        </button>
+                        <div class="text-right">
+                            <span id="moveNumber" class="text-xs text-gray-400 font-mono block">1. e4</span>
+                            <span id="openingName" class="text-[10px] text-indigo-500 font-bold block max-w-[150px] truncate"></span>
+                        </div>
+                    </div>
+                    <div id="coachText" class="text-sm text-gray-800 leading-relaxed font-medium mt-1"></div>
+                    <div id="bestMoveSuggestion" class="hidden mt-3 pt-3 border-t border-gray-200/50 flex flex-col gap-2">
+                        <div class="text-xs text-gray-500">Best was: <b id="bestMoveText"></b></div>
+                        <button onclick="startPvReview()" class="w-full bg-indigo-50 text-indigo-700 px-3 py-2 rounded text-xs font-bold hover:bg-indigo-100 transition-colors flex items-center justify-center gap-2 border border-indigo-200"><i class="fa-solid fa-chess-board"></i> Explore Best Line</button>
                     </div>
                 </div>
             </div>
-
-            <!-- 2. PV Review State (Hidden by default) -->
-            <div class="pv-controls-container">
+            <div id="pvControls" class="pv-controls-container hidden">
                 <div class="flex justify-between items-center mb-2 border-b border-indigo-200 pb-2">
                     <span class="text-xs font-bold text-indigo-700 uppercase tracking-wider">Correcting the Line</span>
-                    <button onclick="stopPvReview()" class="text-xs text-gray-400 hover:text-red-500 font-bold px-2">
-                        <i class="fa-solid fa-times"></i> EXIT
-                    </button>
+                    <button onclick="stopPvReview()" class="text-xs text-gray-400 hover:text-red-500 font-bold px-2"><i class="fa-solid fa-times"></i> EXIT</button>
                 </div>
-                
-                <div id="pvCommentText" class="text-sm text-gray-800 font-medium mb-3 min-h-[60px]">
-                    Analysis loading...
-                </div>
-
+                <div id="pvCommentText" class="text-sm text-gray-800 font-medium mb-3 min-h-[60px]"></div>
                 <div class="flex items-center justify-between bg-white rounded-lg border border-gray-200 p-1">
-                    <button onclick="prevPvMove()" class="p-2 text-gray-600 hover:text-indigo-600 hover:bg-gray-50 rounded w-10">
-                        <i class="fa-solid fa-chevron-left"></i>
-                    </button>
-                    <div class="text-xs font-mono font-bold text-gray-700" id="pvMoveIndicator">
-                        Start
-                    </div>
-                    <button onclick="nextPvMove()" class="p-2 text-gray-600 hover:text-indigo-600 hover:bg-gray-50 rounded w-10">
-                        <i class="fa-solid fa-chevron-right"></i>
-                    </button>
+                    <button onclick="prevPvMove()" class="p-2 text-gray-600 hover:text-indigo-600 hover:bg-gray-50 rounded w-10"><i class="fa-solid fa-chevron-left"></i></button>
+                    <div class="text-xs font-mono font-bold text-gray-700" id="pvMoveIndicator">Start</div>
+                    <button onclick="nextPvMove()" class="p-2 text-gray-600 hover:text-indigo-600 hover:bg-gray-50 rounded w-10"><i class="fa-solid fa-chevron-right"></i></button>
                 </div>
             </div>
-
+            <div id="retryFeedback" class="hidden flex-col gap-2 items-center justify-center h-full">
+                <div class="text-pink-600 font-bold text-lg"><i class="fa-solid fa-puzzle-piece"></i> Spot the Mistake</div>
+                <div class="text-sm text-gray-600 text-center" id="retryMessage">You made a mistake here. Can you find the move Stockfish preferred?</div>
+                <div class="flex gap-2 mt-2"><button onclick="giveUpRetry()" class="text-xs bg-gray-200 text-gray-600 px-3 py-1 rounded hover:bg-gray-300">Show Solution</button></div>
+            </div>
         </div>
 
-        <!-- Chat / Additional Q&A -->
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden mt-4">
             <div class="bg-gray-50 px-4 py-2 border-b text-xs font-bold text-gray-500 uppercase">Ask the Coach</div>
-            <div id="chatHistory" class="p-4 h-40 overflow-y-auto text-sm space-y-2">
-                <div class="text-gray-400 italic text-center text-xs mt-10">Ask specific questions about the game here...</div>
-            </div>
+            <div id="chatHistory" class="p-4 h-40 overflow-y-auto text-sm space-y-2"><div class="text-gray-400 italic text-center text-xs mt-10">Ask specific questions about the game here...</div></div>
             <div class="p-2 border-t flex gap-2 bg-gray-50">
                 <input type="text" id="chatInput" placeholder="Why was that move bad?" class="flex-1 border rounded px-3 py-1 text-sm focus:outline-none focus:border-indigo-500" onkeypress="handleChatEnter(event)">
                 <button onclick="sendChatMessage()" class="bg-indigo-600 text-white px-3 rounded hover:bg-indigo-700"><i class="fa-solid fa-paper-plane"></i></button>
             </div>
         </div>
-
     </div>
 
-    <!-- Settings Modal (API Key) -->
     <div id="settingsModal" class="fixed inset-0 bg-black/50 z-50 hidden flex items-center justify-center">
         <div class="bg-white p-6 rounded-lg shadow-xl w-11/12 max-w-sm">
             <h2 class="text-lg font-bold mb-4">Settings</h2>
             <div class="mb-4">
                 <label class="block text-xs font-bold text-gray-600 mb-1">Gemini API Key</label>
                 <input type="password" id="apiKeyInput" placeholder="Paste key here..." class="w-full border p-2 rounded text-sm">
-                <p class="text-xs text-gray-400 mt-1">Key is saved in browser storage.</p>
             </div>
-            <div class="flex justify-end gap-2">
+            <div class="mb-4 flex items-center justify-between border-t pt-4">
+                <div><label class="block text-sm font-bold text-gray-800">Threat Map</label><p class="text-xs text-gray-500">Highlight active attacks</p></div>
+                <div class="relative inline-block w-10 h-6 align-middle select-none transition duration-200 ease-in">
+                    <input type="checkbox" name="threatToggle" id="threatToggle" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer" onclick="toggleThreatMap()"/>
+                    <label for="threatToggle" class="toggle-label block overflow-hidden h-6 rounded-full bg-gray-300 cursor-pointer"></label>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 mt-6">
                 <button onclick="document.getElementById('settingsModal').classList.add('hidden')" class="px-4 py-2 text-gray-600 text-sm">Close</button>
-                <button id="saveKeyBtn" onclick="saveSettings()" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm font-bold">Save Key</button>
+                <button id="saveKeyBtn" onclick="saveSettings()" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm font-bold">Save Settings</button>
             </div>
         </div>
     </div>
 
-    <!-- PGN Load Modal -->
     <div id="pgnModal" class="fixed inset-0 bg-black/50 z-50 hidden flex items-center justify-center">
         <div class="bg-white p-6 rounded-lg shadow-xl w-11/12 max-w-md">
             <h2 class="text-lg font-bold mb-2">Load Game</h2>
@@ -318,502 +268,251 @@
             </div>
         </div>
     </div>
-    
-    <!-- Floating Load Button -->
-    <button onclick="document.getElementById('pgnModal').classList.remove('hidden')" class="fixed bottom-6 right-6 bg-indigo-600 text-white w-14 h-14 rounded-full shadow-lg flex items-center justify-center hover:bg-indigo-700 z-40 transition-transform hover:scale-110">
-        <i class="fa-solid fa-upload text-xl"></i>
-    </button>
+    <button onclick="document.getElementById('pgnModal').classList.remove('hidden')" class="fixed bottom-6 right-6 bg-indigo-600 text-white w-14 h-14 rounded-full shadow-lg flex items-center justify-center hover:bg-indigo-700 z-40 transition-transform hover:scale-110"><i class="fa-solid fa-upload text-xl"></i></button>
 
     <script>
-        // --- CONSTANTS ---
         const STOCKFISH_URL = 'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js';
         const MODEL_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent';
 
-        // --- STATE ---
         let game = new Chess();
         let board = null;
         let stockfish = null;
         let gameHistory = []; 
         let currentMoveIndex = -1; 
-        let analysisData = []; // Stores eval, classification, PV (line)
-        let geminiComments = {}; // Move-level summary
+        let analysisData = []; 
+        let geminiComments = {}; 
         let isAnalyzing = false;
         
-        // PV Review State
-        let pvState = {
-            active: false,
-            moves: [], // Array of move objects {from, to}
-            comments: [], // Array of strings
-            currentIndex: -1, // -1 = Start of PV
-            startFen: "",
-            tempGame: null // Chess instance for the PV
-        };
+        let pvState = { active: false, moves: [], comments: [], currentIndex: -1, startFen: "", tempGame: null };
+        let retryState = { active: false, targetMove: null, enabled: false };
+        let threatMapEnabled = false;
 
-        // --- INIT ---
         window.addEventListener('DOMContentLoaded', () => {
             initBoard();
             initStockfish();
             loadSettings();
             
-            if (!localStorage.getItem('gemini_api_key')) {
-                openSettings();
+            const overlay = document.getElementById('heatMapOverlay');
+            for(let i=0; i<64; i++) {
+                const sq = document.createElement('div');
+                sq.className = 'heat-square';
+                sq.id = 'heat-' + i;
+                overlay.appendChild(sq);
             }
 
-            setTimeout(() => {
-                if(board) board.resize();
-            }, 300);
+            if (!localStorage.getItem('gemini_api_key')) openSettings();
+            setTimeout(() => { if(board) board.resize(); }, 300);
         });
 
-        // --- 1. BOARD & PIECES ---
-        function pieceTheme(piece) {
-            return 'https://images.chesscomfiles.com/chess-themes/pieces/neo/150/' + piece.toLowerCase() + '.png';
-        }
-
+        function pieceTheme(piece) { return 'https://images.chesscomfiles.com/chess-themes/pieces/neo/150/' + piece.toLowerCase() + '.png'; }
         function initBoard() {
-            board = Chessboard('board', {
-                position: 'start',
-                draggable: false, 
-                pieceTheme: pieceTheme
-            });
+            board = Chessboard('board', { position: 'start', draggable: false, pieceTheme: pieceTheme, onDragStart: onDragStart, onDrop: onDrop });
             window.addEventListener('resize', board.resize);
         }
-        
-        function flipBoard() {
-            if(board) board.flip();
-        }
+        function flipBoard() { if(board) board.flip(); updateThreatMap(); }
 
-        // --- 2. STOCKFISH ENGINE ---
-        function initStockfish() {
-            try {
-                const blob = new Blob([`importScripts('${STOCKFISH_URL}');`], {type: 'application/javascript'});
-                stockfish = new Worker(URL.createObjectURL(blob));
-                stockfish.postMessage('uci');
-            } catch (e) {
-                console.error("Stockfish init failed:", e);
+        // --- RETRY LOGIC ---
+        function onDragStart(source, piece) {
+            if (!retryState.active) return false;
+            if (game.turn() === 'w' && piece.search(/^b/) !== -1) return false;
+            if (game.turn() === 'b' && piece.search(/^w/) !== -1) return false;
+        }
+        function onDrop(source, target) {
+            if (!retryState.active) return 'snapback';
+            const move = game.move({ from: source, to: target, promotion: 'q' });
+            if (move === null) return 'snapback';
+            const targetSan = retryState.targetMove;
+            const success = (move.san === targetSan);
+            game.undo(); 
+            if (success) {
+                document.getElementById('retryMessage').innerHTML = `<b class="text-green-600">Correct!</b> The best move was indeed ${targetSan}.`;
+                document.getElementById('retryMessage').classList.add('animate-pulse');
+                setTimeout(giveUpRetry, 1500);
+                return;
+            } else {
+                document.getElementById('retryMessage').innerText = `Not quite. Try again!`;
+                return 'snapback';
             }
         }
-
-        // --- 3. GAME LOADING ---
-        function loadPGN() {
-            const btn = document.getElementById('loadPgnBtn');
-            const originalText = btn.innerText;
-            btn.innerText = "Loading...";
-
-            setTimeout(() => {
-                const pgn = document.getElementById('pgnInput').value.trim();
-                if (!pgn) {
-                    btn.innerText = originalText;
-                    return;
-                }
-
-                try {
-                    let success = game.load_pgn(pgn);
-                    
-                    if (!success) {
-                        let cleanPgn = pgn.replace(/\{.*?\}/g, '').replace(/\$\d+/g, '');
-                        if (!game.load_pgn(cleanPgn)) {
-                            const movesOnly = pgn.replace(/\[.*?\]/g, "").trim();
-                            if (!game.load_pgn(movesOnly)) {
-                                throw new Error("Parse failed");
-                            }
-                        }
-                    }
-
-                    gameHistory = game.history({ verbose: true });
-                    game.reset();
-                    currentMoveIndex = -1;
-                    board.position(game.fen());
-                    board.orientation('white'); 
-                    
-                    analysisData = [];
-                    geminiComments = {};
-                    stopPvReview(); // Reset PV state if active
-                    
-                    updateUI();
-                    document.getElementById('pgnModal').classList.add('hidden');
-                    document.getElementById('gameStatus').innerText = "Game Loaded. Click Review.";
-                    document.getElementById('feedbackPlaceholder').innerHTML = '<i class="fa-solid fa-wand-magic-sparkles text-2xl mb-2 text-indigo-500"></i><br>Game Loaded.<br>Click <b>Review</b> for AI Analysis.';
-                    document.getElementById('pgnInput').value = ''; 
-                    
-                    setTimeout(() => board.resize(), 100);
-
-                } catch (e) {
-                    alert("Invalid PGN. Please paste a standard PGN format.");
-                    console.error(e);
-                } finally {
-                    btn.innerText = originalText;
-                }
-            }, 50);
+        function toggleRetryMode() { retryState.enabled = document.getElementById('retryToggle').checked; updateUI(); }
+        function enterRetryMode(data) {
+            retryState.active = true; retryState.targetMove = data.bestMoveSan;
+            game.load(data.fenBefore); board.position(data.fenBefore);
+            document.getElementById('board').classList.add('board-retry-highlight');
+            document.getElementById('retryModeBadge').classList.remove('hidden');
+            document.getElementById('normalFeedback').classList.add('hidden');
+            document.getElementById('retryFeedback').classList.remove('hidden');
+            document.getElementById('retryFeedback').classList.add('flex');
+            document.getElementById('retryMessage').innerText = "You made a mistake here. Can you find the move Stockfish preferred?";
+            document.getElementById('mainNavButtons').style.opacity = '0.5'; document.getElementById('mainNavButtons').style.pointerEvents = 'none';
         }
-
-        // --- 4. NAVIGATION ---
-        function updateUI() {
-            if(pvState.active) return; // Don't update main UI if in PV mode
-            
-            board.position(game.fen());
-            
-            const turn = game.turn();
-            document.getElementById('turnIndicator').className = `w-3 h-3 rounded-full border-2 border-black ${turn === 'w' ? 'bg-white' : 'bg-black'}`;
-
+        function giveUpRetry() {
+            retryState.active = false;
+            const data = analysisData[currentMoveIndex];
+            game.load(data.fen); board.position(data.fen);
+            document.getElementById('board').classList.remove('board-retry-highlight');
+            document.getElementById('retryModeBadge').classList.add('hidden');
+            document.getElementById('normalFeedback').classList.remove('hidden');
+            document.getElementById('retryFeedback').classList.add('hidden');
+            document.getElementById('retryFeedback').classList.remove('flex');
+            document.getElementById('mainNavButtons').style.opacity = '1'; document.getElementById('mainNavButtons').style.pointerEvents = 'auto';
             updateCoachBox();
-            updateEvalBar();
         }
 
-        function nextMove() {
-            if(pvState.active) return;
-            if (currentMoveIndex < gameHistory.length - 1) {
-                currentMoveIndex++;
-                game.move(gameHistory[currentMoveIndex]);
-                updateUI();
+        // --- THREAT MAP ---
+        function toggleThreatMap() {
+            threatMapEnabled = document.getElementById('threatToggle').checked;
+            const overlay = document.getElementById('heatMapOverlay');
+            if(threatMapEnabled) overlay.classList.remove('hidden'); else overlay.classList.add('hidden');
+            updateThreatMap();
+        }
+        function updateThreatMap() {
+            if(!threatMapEnabled || !game) return;
+            const fen = game.fen(); const squares = calculateControl(fen); const orientation = board.orientation();
+            for(let i=0; i<64; i++) {
+                const rank = 7 - Math.floor(i / 8); const file = i % 8;
+                let val = 0;
+                if (orientation === 'white') { const fileChar = String.fromCharCode(97 + file); const rankChar = String.fromCharCode(49 + rank); val = squares[fileChar + rankChar] || 0; } 
+                else { const fileChar = String.fromCharCode(104 - file); const rankChar = String.fromCharCode(49 + (7-rank)); val = squares[fileChar + rankChar] || 0; }
+                const el = document.getElementById('heat-' + i); el.style.backgroundColor = 'transparent';
+                if (val > 0) el.style.backgroundColor = `rgba(59, 130, 246, ${Math.min(0.6, val * 0.2)})`; 
+                else if (val < 0) el.style.backgroundColor = `rgba(239, 68, 68, ${Math.min(0.6, Math.abs(val) * 0.2)})`;
             }
         }
-
-        function prevMove() {
-            if(pvState.active) return;
-            if (currentMoveIndex >= 0) {
-                game.undo();
-                currentMoveIndex--;
-                updateUI();
-            }
+        function calculateControl(fen) {
+            const counts = {}; const files = ['a','b','c','d','e','f','g','h']; for(let r=1; r<=8; r++) files.forEach(f => counts[f+r] = 0);
+            const tokens = fen.split(' '); const fenBase = tokens[0] + " "; const fenEnd = " - - 0 1"; 
+            try {
+                const gameW = new Chess(fenBase + "w" + fenEnd); gameW.moves({verbose:true}).forEach(m => counts[m.to] += 1);
+                const gameB = new Chess(fenBase + "b" + fenEnd); gameB.moves({verbose:true}).forEach(m => counts[m.to] -= 1);
+            } catch(e) {}
+            return counts;
         }
 
-        function goToStart() {
-            if(pvState.active) return;
-            game.reset();
-            currentMoveIndex = -1;
-            updateUI();
-        }
-
-        function goToEnd() {
-            if(pvState.active) return;
-            while (currentMoveIndex < gameHistory.length - 1) {
-                currentMoveIndex++;
-                game.move(gameHistory[currentMoveIndex]);
-            }
-            updateUI();
-        }
-
-        // --- 5. COACH BOX & EVAL LOGIC ---
-        function updateEvalBar() {
-            let evalVal = 0.00;
-            const barFill = document.getElementById('visualEvalBar');
-            const evalText = document.getElementById('evalText');
-            
-            if (currentMoveIndex >= 0 && analysisData[currentMoveIndex]) {
-                const data = analysisData[currentMoveIndex];
-                
-                if (typeof data.eval === 'string' && data.eval.startsWith('M')) {
-                    const mateIn = parseInt(data.eval.substring(1));
-                    evalVal = mateIn > 0 ? 10 : -10; 
-                    evalText.innerText = `M${Math.abs(mateIn)}`;
-                } else {
-                    evalVal = parseFloat(data.eval);
-                    evalText.innerText = Math.abs(evalVal).toFixed(2);
-                }
-            } else {
-                evalText.innerText = "0.30";
-                evalVal = 0.3;
-            }
-
-            const clampedEval = Math.max(-5, Math.min(5, evalVal));
-            const percentage = 50 + (clampedEval * 10); 
-            
-            barFill.style.height = `${percentage}%`;
-            
-            if (percentage > 90) evalText.style.color = '#333'; 
-            else if (percentage < 10) evalText.style.color = '#fff'; 
-            else evalText.style.color = '#999'; 
-        }
-
-        function updateCoachBox() {
-            if(pvState.active) return; // Handled by PV logic
-
-            const contentDiv = document.getElementById('feedbackContent');
-            const placeholder = document.getElementById('feedbackPlaceholder');
-            const box = document.getElementById('coachBox');
-            const badge = document.getElementById('moveClassBadge');
-            const suggestionDiv = document.getElementById('bestMoveSuggestion');
-            const bestMoveText = document.getElementById('bestMoveText');
-
-            if (analysisData.length === 0) {
-                contentDiv.classList.add('hidden');
-                placeholder.classList.remove('hidden');
-                box.className = 'coach-box p-4 rounded-r-lg shadow-sm flex flex-col justify-center'; 
-                return;
-            }
-
-            if (currentMoveIndex === -1) {
-                contentDiv.classList.add('hidden');
-                placeholder.classList.remove('hidden');
-                placeholder.innerHTML = "Start of Game";
-                return;
-            }
-
-            contentDiv.classList.remove('hidden');
-            placeholder.classList.add('hidden');
-
-            const data = analysisData[currentMoveIndex];
-            const moveInfo = gameHistory[currentMoveIndex];
-            const moveNum = Math.floor(currentMoveIndex / 2) + 1;
-            const moveNotation = `${moveNum}${moveInfo.color === 'w' ? '.' : '...'} ${moveInfo.san}`;
-
-            badge.innerText = data.classification;
-            badge.className = `classification-badge bg-${data.classification.toLowerCase()}`;
-            box.className = `coach-box ${data.classification.toLowerCase()} p-4 rounded-r-lg shadow-sm flex flex-col justify-center`;
-
-            // Display main commentary
-            let commentData = geminiComments[currentMoveIndex + 1];
-            let mainComment = "Standard move.";
-            
-            if (commentData) {
-                if (typeof commentData === 'string') mainComment = commentData;
-                else if (commentData.analysis) mainComment = commentData.analysis;
-            } else {
-                // Fallback
-                if (data.classification === "Best") mainComment = "Excellent find! Top engine move.";
-                else if (data.classification === "Good") mainComment = "Solid move.";
-                else if (data.classification === "Mistake") mainComment = "This loses advantage.";
-                else if (data.classification === "Blunder") mainComment = "Critical error.";
-            }
-            
-            document.getElementById('coachText').innerHTML = marked.parse(mainComment);
-            document.getElementById('moveNumber').innerText = moveNotation;
-
-            // Handle Suggestions
-            const needsSuggestion = ["Inaccuracy", "Mistake", "Miss", "Blunder"].includes(data.classification);
-            
-            if (needsSuggestion && data.bestMoveSan && data.pv) {
-                suggestionDiv.classList.remove('hidden');
-                bestMoveText.innerText = data.bestMoveSan;
-            } else {
-                suggestionDiv.classList.add('hidden');
-            }
-        }
-
-        // --- 6. PV REVIEW MODE LOGIC ---
-        
-        function startPvReview() {
-            if (currentMoveIndex < 0 || !analysisData[currentMoveIndex]) return;
-            const data = analysisData[currentMoveIndex];
-            
-            if (!data.pv) { alert("No line available."); return; }
-
-            // 1. Setup State
-            pvState.active = true;
-            pvState.startFen = data.fenBefore; // FEN BEFORE the mistake
-            pvState.tempGame = new Chess(data.fenBefore);
-            pvState.currentIndex = -1;
-            
-            // 2. Parse Moves (UCI to Move Objects)
-            pvState.moves = [];
-            const moveStrings = data.pv.split(' ');
-            
-            // Limit to 5-6 moves for clarity
-            const limit = Math.min(moveStrings.length, 6);
-            
-            for(let i=0; i<limit; i++) {
-                const m = moveStrings[i];
-                const from = m.substring(0,2);
-                const to = m.substring(2,4);
-                const promotion = m.length > 4 ? m.substring(4,5) : 'q';
-                
-                // Validate on temp game
-                const moveObj = pvState.tempGame.move({from, to, promotion});
-                if(moveObj) {
-                    pvState.moves.push(moveObj);
-                } else {
-                    break; 
-                }
-            }
-            pvState.tempGame.reset(); // Reset for playback
-            pvState.tempGame.load(data.fenBefore);
-
-            // 3. Get Comments (from Gemini Data if available)
-            pvState.comments = [];
-            const geminiData = geminiComments[currentMoveIndex + 1];
-            if (geminiData && geminiData.pv_explanation) {
-                pvState.comments = geminiData.pv_explanation; // Expecting array
-            } else {
-                // Fallback comments
-                pvState.comments = pvState.moves.map((m, i) => i === 0 ? "The engine preferred this start." : "Follow up.");
-            }
-
-            // 4. Update UI
-            const box = document.getElementById('coachBox');
-            box.classList.add('pv-active');
-            document.getElementById('board').classList.add('board-pv-highlight');
-            document.getElementById('pvModeBadge').classList.remove('hidden');
-            
-            // Disable main nav
-            document.getElementById('mainNavButtons').style.opacity = '0.5';
-            document.getElementById('mainNavButtons').style.pointerEvents = 'none';
-
-            // Show Board at Start of Variation
-            board.position(pvState.startFen);
-            
-            updatePvUI();
-        }
-
-        function stopPvReview() {
-            pvState.active = false;
-            
-            const box = document.getElementById('coachBox');
-            box.classList.remove('pv-active');
-            document.getElementById('board').classList.remove('board-pv-highlight');
-            document.getElementById('pvModeBadge').classList.add('hidden');
-            
-            // Enable main nav
-            document.getElementById('mainNavButtons').style.opacity = '1';
-            document.getElementById('mainNavButtons').style.pointerEvents = 'auto';
-            
-            // Restore Board
-            updateUI();
-        }
-
-        function nextPvMove() {
-            if (!pvState.active) return;
-            if (pvState.currentIndex < pvState.moves.length - 1) {
-                pvState.currentIndex++;
-                const move = pvState.moves[pvState.currentIndex];
-                pvState.tempGame.move(move);
-                board.position(pvState.tempGame.fen());
-                updatePvUI();
-            }
-        }
-
-        function prevPvMove() {
-            if (!pvState.active) return;
-            if (pvState.currentIndex >= 0) {
-                pvState.tempGame.undo();
-                pvState.currentIndex--;
-                board.position(pvState.tempGame.fen());
-                updatePvUI();
-            }
-        }
-
-        function updatePvUI() {
-            const indicator = document.getElementById('pvMoveIndicator');
-            const commentText = document.getElementById('pvCommentText');
-            
-            if (pvState.currentIndex === -1) {
-                indicator.innerText = "Start";
-                commentText.innerHTML = "<b>Initial Position.</b><br>Click > to see why this is better.";
-            } else {
-                const moveObj = pvState.moves[pvState.currentIndex];
-                // Calculate move number based on fen
-                // Since we don't have easy move number access without parsing FEN, let's just use relative
-                indicator.innerText = `Move ${pvState.currentIndex + 1}`;
-                
-                // Get comment
-                let comment = pvState.comments[pvState.currentIndex] || "Continuing the best line.";
-                commentText.innerHTML = `<b>${moveObj.san}:</b> ${comment}`;
-            }
-        }
-
-
-        // --- 7. ANALYSIS PIPELINE ---
-        function cancelAnalysis() {
-            isAnalyzing = false;
-            document.getElementById('analysisOverlay').classList.add('hidden');
-            document.getElementById('analyzeBtn').disabled = false;
-        }
-        
-        // Helper: Convert UCI string to SAN string
-        function uciToSan(fen, pvString) {
-            if (!pvString) return "";
-            
-            let moveCount = 1;
-            const parts = fen.split(' ');
-            if (parts.length >= 6) moveCount = parseInt(parts[5]);
-            
+        // --- PLAN & CLUSTERING ALGORITHMS ---
+        function getPawnStructure(fen) {
+            // Count center pawns (d4, e4 vs d5, e5)
+            // Files 3 and 4 (d and e), Ranks 3,4,5,6
+            // Simple heuristic: If d/e pawns are blocked by other pawns = Closed.
+            // If d/e files empty = Open.
             const temp = new Chess(fen);
-            const moves = pvString.split(' ');
-            let sanStr = "";
+            const board = temp.board();
+            let centerPawns = 0;
+            let blockedCenter = 0;
             
-            for (let i = 0; i < moves.length; i++) {
-                const m = moves[i];
-                const from = m.substring(0, 2);
-                const to = m.substring(2, 4);
-                const promotion = m.length > 4 ? m.substring(4, 5) : undefined;
-                
-                if (temp.turn() === 'w') sanStr += `${moveCount}. `;
-                else if (i === 0) sanStr += `${moveCount}... `;
+            // Check d4, e4, d5, e5
+            const centers = [[3,3], [3,4], [4,3], [4,4]]; // Indices in 8x8 array
+            centers.forEach(([r,c]) => {
+                const p = board[r][c];
+                if(p && p.type === 'p') {
+                    centerPawns++;
+                    // Check if blocked by opposing pawn in front
+                    const frontR = p.color === 'w' ? r-1 : r+1;
+                    if(board[frontR] && board[frontR][c] && board[frontR][c].type === 'p' && board[frontR][c].color !== p.color) {
+                        blockedCenter++;
+                    }
+                }
+            });
 
-                const moveObj = temp.move({ from, to, promotion });
-                if (moveObj) {
-                    sanStr += moveObj.san + " ";
-                    if (temp.turn() === 'w') moveCount++;
-                } else break;
-            }
-            return sanStr.trim();
+            if (centerPawns === 0) return "Open Center";
+            if (blockedCenter >= 2) return "Closed/Locked";
+            if (centerPawns >= 2) return "Semi-Open";
+            return "Fluid";
         }
 
+        function getSectorActivity(gameHistory, currentIndex) {
+            // Analyze last 6 moves (3 white, 3 black)
+            if (currentIndex < 5) return "Opening/Development";
+            
+            let kSide = 0, qSide = 0, center = 0;
+            const start = Math.max(0, currentIndex - 5);
+            
+            for(let i = start; i <= currentIndex; i++) {
+                const m = gameHistory[i];
+                // Check destination square file
+                const file = m.to.charCodeAt(0) - 97; // a=0, h=7
+                if (file <= 2) qSide++; // a,b,c
+                else if (file >= 5) kSide++; // f,g,h
+                else center++; // d,e
+            }
+            
+            if (kSide > qSide && kSide > center) return "Kingside Play";
+            if (qSide > kSide && qSide > center) return "Queenside Play";
+            return "Center Battle";
+        }
+
+        // --- EXTERNAL APIs ---
+        async function fetchOpeningData(fen) {
+            try {
+                const url = `https://explorer.lichess.ovh/masters?fen=${fen}`;
+                const res = await fetch(url);
+                const data = await res.json();
+                if (data.opening) return data.opening.name;
+            } catch(e) { return null; }
+            return null;
+        }
+
+        async function fetchTablebaseData(fen) {
+            const pieces = fen.split(' ')[0].replace(/\//g, '').replace(/\d/g, '').length;
+            if (pieces > 7) return null;
+            try {
+                const url = `https://tablebase.lichess.ovh/standard?fen=${fen}`;
+                const res = await fetch(url);
+                const data = await res.json();
+                return `Tablebase: ${data.category.toUpperCase()} (in ${data.dtz} plies)`;
+            } catch(e) { return null; }
+        }
+
+        // --- ANALYSIS PIPELINE ---
         async function startAnalysis() {
             const apiKey = localStorage.getItem('gemini_api_key');
-            if (!apiKey) { 
-                alert("Please add your Gemini API Key in settings first."); 
-                openSettings();
-                return; 
-            }
-            
+            if (!apiKey) { alert("Please add your Gemini API Key in settings first."); openSettings(); return; }
             const focus = document.getElementById('analysisFocus').value; 
-
             isAnalyzing = true;
-            const overlay = document.getElementById('analysisOverlay');
-            overlay.classList.remove('hidden');
+            document.getElementById('analysisOverlay').classList.remove('hidden');
             document.getElementById('analyzeBtn').disabled = true;
-            document.getElementById('statusTitle').innerText = "Analyzing with Stockfish...";
-            document.getElementById('geminiStatus').classList.add('hidden');
-            document.getElementById('progressBar').style.width = "0%";
-            document.getElementById('progressBar').className = "h-full bg-indigo-500 transition-all duration-300";
-
             const tempGame = new Chess();
             analysisData = [];
 
             try {
-                // 1. ENGINE PASS
                 for (let i = 0; i < gameHistory.length; i++) {
                     if (!isAnalyzing) return; 
-
                     const move = gameHistory[i];
-                    
-                    const pct = Math.round(((i + 1) / gameHistory.length) * 100);
-                    document.getElementById('progressBar').style.width = pct + "%";
-                    document.getElementById('progressText').innerText = `Stockfish: Move ${i+1}/${gameHistory.length}`;
+                    document.getElementById('progressBar').style.width = Math.round(((i + 1) / gameHistory.length) * 100) + "%";
+                    document.getElementById('progressText').innerText = `Move ${i+1}/${gameHistory.length}`;
 
                     const fenBefore = tempGame.fen();
-                    const preMoveResult = await runStockfish(fenBefore);
+                    const material = getMaterialImbalance(tempGame);
+                    const tactics = getTacticsData(fenBefore, move);
                     
+                    // NEW: Plan Identification Logic
+                    const structure = getPawnStructure(fenBefore);
+                    const sector = getSectorActivity(gameHistory, i);
+                    
+                    let openingInfo = null;
+                    if (i < 12) openingInfo = await fetchOpeningData(fenBefore);
+                    
+                    const preMoveResult = await runStockfish(fenBefore);
                     let bestMoveSan = preMoveResult.bestMove;
                     let bestLineSan = "";
-                    
                     if(preMoveResult.bestMove && preMoveResult.bestMove !== '-') {
-                        const from = preMoveResult.bestMove.substring(0,2);
-                        const to = preMoveResult.bestMove.substring(2,4);
-                        const promotion = preMoveResult.bestMove.length > 4 ? preMoveResult.bestMove.substring(4,5) : undefined;
-                        
                         const checkGame = new Chess(fenBefore);
+                        const from = preMoveResult.bestMove.substring(0,2); const to = preMoveResult.bestMove.substring(2,4); const promotion = preMoveResult.bestMove.length > 4 ? preMoveResult.bestMove.substring(4,5) : undefined;
                         const moveObj = checkGame.move({ from, to, promotion });
                         if(moveObj) bestMoveSan = moveObj.san;
-                        
-                        if (preMoveResult.pv) {
-                            bestLineSan = uciToSan(fenBefore, preMoveResult.pv);
-                        }
+                        if (preMoveResult.pv) bestLineSan = uciToSan(fenBefore, preMoveResult.pv);
                     }
-
-                    let currentEvalBefore = parseEval(preMoveResult.eval, tempGame.turn());
+                    let currentEvalBefore = parseEval(preMoveResult.eval);
 
                     tempGame.move(move.san);
-                    
-                    const postMoveResult = await runStockfish(tempGame.fen());
-                    let currentEvalAfter = parseEval(postMoveResult.eval, tempGame.turn());
+                    const fenAfter = tempGame.fen();
+                    let tablebaseInfo = await fetchTablebaseData(fenAfter);
+
+                    const postMoveResult = await runStockfish(fenAfter);
+                    let currentEvalAfter = parseEval(postMoveResult.eval);
                     
                     let delta = 0;
-                    if (move.color === 'w') {
-                        delta = currentEvalAfter - currentEvalBefore;
-                    } else {
-                        delta = currentEvalBefore - currentEvalAfter; 
-                    }
+                    if (move.color === 'w') delta = currentEvalAfter - currentEvalBefore; else delta = currentEvalBefore - currentEvalAfter; 
 
                     let classification = "Neutral";
                     if (i < 8 && Math.abs(delta) > -0.3) classification = "Book"; 
@@ -823,242 +522,249 @@
                     else if (delta > -1.5) classification = "Mistake"; 
                     else if (delta > -3.0) classification = "Miss"; 
                     else classification = "Blunder"; 
-
                     if (move.san === bestMoveSan) classification = "Best";
                     
                     analysisData.push({
-                        eval: currentEvalAfter.toFixed(2), 
-                        bestMove: preMoveResult.bestMove,
-                        bestMoveSan: bestMoveSan,
-                        pv: preMoveResult.pv, 
-                        pvSan: bestLineSan, 
-                        san: move.san,
-                        color: move.color,
-                        classification: classification,
-                        fen: tempGame.fen(),
-                        fenBefore: fenBefore
+                        eval: currentEvalAfter.toFixed(2), bestMove: preMoveResult.bestMove, bestMoveSan: bestMoveSan,
+                        pv: preMoveResult.pv, pvSan: bestLineSan, san: move.san, color: move.color, classification: classification,
+                        fen: fenAfter, fenBefore: fenBefore, material: material, tactics: tactics,
+                        opening: openingInfo, tablebase: tablebaseInfo,
+                        structure: structure, sector: sector // Store context
                     });
                 }
-
-                // 2. GEMINI PASS
-                if (!isAnalyzing) return;
                 
                 document.getElementById('statusTitle').innerText = "Asking Coach...";
                 document.getElementById('geminiStatus').classList.remove('hidden');
-                document.getElementById('progressText').innerText = "AI is writing commentary...";
                 document.getElementById('progressBar').className = "h-full bg-purple-500 transition-all duration-300 animate-pulse";
-                
                 await getGeminiCommentary(apiKey, focus);
 
-            } catch (err) {
-                console.error("Analysis failed:", err);
-                alert("An error occurred during analysis: " + err.message);
-            } finally {
-                overlay.classList.add('hidden');
-                document.getElementById('analyzeBtn').disabled = false;
-                isAnalyzing = false;
-                
-                if (analysisData.length > 0) {
-                   if(currentMoveIndex === -1) nextMove(); 
-                   else updateUI();
-                }
-            }
+            } catch (err) { console.error(err); alert("Error: " + err.message); } 
+            finally { document.getElementById('analysisOverlay').classList.add('hidden'); document.getElementById('analyzeBtn').disabled = false; isAnalyzing = false; if (analysisData.length > 0) { if(currentMoveIndex === -1) nextMove(); else updateUI(); } }
         }
 
         // --- HELPERS ---
-        function parseEval(evalStr, turn) {
-            if (typeof evalStr === 'string' && evalStr.startsWith('M')) {
-                return parseFloat(evalStr.replace('M', '')) > 0 ? 100 : -100; 
-            }
-            return parseFloat(evalStr);
-        }
-
-        function runStockfish(fen) {
+        function parseEval(evalStr) { if (typeof evalStr === 'string' && evalStr.startsWith('M')) return parseFloat(evalStr.replace('M', '')) > 0 ? 100 : -100; return parseFloat(evalStr); }
+        function runStockfish(fen, depth = 12) {
             return new Promise(resolve => {
                 if (!stockfish) initStockfish();
-
-                const timeoutId = setTimeout(() => {
-                    resolve({ eval: "0.00", bestMove: "-", pv: "" }); 
-                }, 3000); 
-
-                stockfish.postMessage('stop');
-                stockfish.postMessage('position fen ' + fen);
-                stockfish.postMessage('go depth 12'); 
-
-                let best = "-";
-                let evalScore = "0.00";
-                let pvLine = "";
-
+                const timeoutId = setTimeout(() => { resolve({ eval: "0.00", bestMove: "-", pv: "" }); }, 4000); 
+                stockfish.postMessage('stop'); stockfish.postMessage('position fen ' + fen); stockfish.postMessage(`go depth ${depth}`); 
+                let best = "-"; let evalScore = "0.00"; let pvLine = "";
                 const listener = (e) => {
                     const line = e.data;
-                    
-                    if (line.includes(' pv ')) {
-                        const parts = line.split(' pv ');
-                        if(parts[1]) pvLine = parts[1];
-                    }
-
-                    if (line.includes('cp ')) {
-                        const match = line.match(/cp (-?\d+)/);
-                        if(match) {
-                            let score = parseInt(match[1]) / 100;
-                            const side = fen.split(' ')[1];
-                            if (side === 'b') score = -score;
-                            evalScore = score.toFixed(2);
-                        }
-                    }
-                    if (line.includes('mate ')) {
-                        const match = line.match(/mate (-?\d+)/);
-                        if(match) {
-                            let mateIn = parseInt(match[1]);
-                            const side = fen.split(' ')[1];
-                            if (side === 'b') mateIn = -mateIn;
-                            evalScore = "M" + mateIn;
-                        }
-                    }
-                    if (line.startsWith('bestmove')) {
-                        clearTimeout(timeoutId); 
-                        best = line.split(' ')[1]; 
-                        stockfish.removeEventListener('message', listener);
-                        resolve({ eval: evalScore, bestMove: best, pv: pvLine }); 
-                    }
+                    if (line.includes(' pv ')) { const parts = line.split(' pv '); if(parts[1]) pvLine = parts[1]; }
+                    if (line.includes('cp ')) { const match = line.match(/cp (-?\d+)/); if(match) { let score = parseInt(match[1]) / 100; const side = fen.split(' ')[1]; if (side === 'b') score = -score; evalScore = score.toFixed(2); } }
+                    if (line.includes('mate ')) { const match = line.match(/mate (-?\d+)/); if(match) { let mateIn = parseInt(match[1]); const side = fen.split(' ')[1]; if (side === 'b') mateIn = -mateIn; evalScore = "M" + mateIn; } }
+                    if (line.startsWith('bestmove')) { clearTimeout(timeoutId); best = line.split(' ')[1]; stockfish.removeEventListener('message', listener); resolve({ eval: evalScore, bestMove: best, pv: pvLine }); }
                 };
                 stockfish.addEventListener('message', listener);
             });
         }
+        function uciToSan(fen, pvString) {
+            if (!pvString) return "";
+            const parts = fen.split(' '); let moveCount = parseInt(parts[5]) || 1;
+            const temp = new Chess(fen); const moves = pvString.split(' '); let sanStr = "";
+            for (let i = 0; i < moves.length; i++) {
+                const m = moves[i]; const from = m.substring(0, 2); const to = m.substring(2, 4); const promotion = m.length > 4 ? m.substring(4, 5) : undefined;
+                if (temp.turn() === 'w') sanStr += `${moveCount}. `; else if (i === 0) sanStr += `${moveCount}... `;
+                const moveObj = temp.move({ from, to, promotion });
+                if (moveObj) { sanStr += moveObj.san + " "; if (temp.turn() === 'w') moveCount++; } else break;
+            }
+            return sanStr.trim();
+        }
+        function getMaterialImbalance(gameInstance) {
+            const pieces = gameInstance.board().flat(); let wMat = 0, bMat = 0; const values = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+            pieces.forEach(p => { if (!p) return; const val = values[p.type]; if (p.color === 'w') wMat += val; else bMat += val; });
+            const diff = wMat - bMat; return diff > 0 ? `White +${diff}` : (diff < 0 ? `Black +${Math.abs(diff)}` : "Equal");
+        }
+        function getTacticsData(fenBefore, move) {
+            let tactics = [];
+            const val = {p:1, n:3, b:3, r:5, q:9, k:100};
+            if(move.flags.includes('c')) { if(val[move.captured] < val[move.piece]) tactics.push("Trade Down?"); }
+            if(move.san.includes('+')) tactics.push("Check");
+            return tactics.join(", ");
+        }
 
-        // --- 8. GEMINI API ---
         async function getGeminiCommentary(apiKey, focus) {
             let gameLog = "";
             analysisData.forEach((d, i) => {
                 const isRelevant = focus === 'both' || focus === d.color;
-                
                 if(isRelevant) {
                     if(["Mistake", "Blunder", "Miss", "Inaccuracy", "Best"].includes(d.classification) || i % 5 === 0) {
-                        const context = `\n   FEN: ${d.fenBefore}\n   Best Line (SAN): ${d.pvSan}`;
+                        let extra = "";
+                        if(d.opening) extra += `\n   Opening: ${d.opening}`;
+                        if(d.tablebase) extra += `\n   ${d.tablebase}`;
+                        const context = `\n   FEN: ${d.fenBefore}\n   Context: ${d.structure} | ${d.sector}\n   Mat: ${d.material} | Tact: ${d.tactics}${extra}\n   Best Line (SAN): ${d.pvSan}`;
                         gameLog += `Move ${i+1} (${d.color}): ${d.san} (Eval: ${d.eval}, Class: ${d.classification}, Better: ${d.bestMoveSan})${context}\n`;
                     }
-                } else {
-                     gameLog += `Move ${i+1} (${d.color}): ${d.san} (Eval: ${d.eval})\n`;
-                }
+                } else gameLog += `Move ${i+1} (${d.color}): ${d.san}\n`;
             });
-
-            if(!gameLog) gameLog = "Game was very balanced.";
+            if(!gameLog) gameLog = "Game was balanced.";
             
-            let focusInstruction = "Analyze both sides equally.";
-            if(focus === 'w') focusInstruction = "Player is WHITE. Focus on White's moves.";
-            if(focus === 'b') focusInstruction = "Player is BLACK. Focus on Black's moves.";
+            let focusInstruction = "Analyze both sides.";
+            if(focus === 'w') focusInstruction = "Player is WHITE. Focus on White.";
+            if(focus === 'b') focusInstruction = "Player is BLACK. Focus on Black.";
 
-            const prompt = `
-            You are a Grandmaster Chess Coach. 
-            ${focusInstruction}
-
+            const prompt = `You are a Grandmaster Chess Coach. ${focusInstruction}
             **TASK:**
-            1. Analyze mistakes/blunders/misses.
-            2. For critical errors, provide a **move-by-move explanation of the Best Line**.
-
-            **JSON OUTPUT FORMAT:**
-            {
-                "12": {
-                    "analysis": "You missed a fork. Moving the Knight was better.",
-                    "pv_explanation": [
-                        "Nf6 checks the King.",
-                        "Kxe7 is forced.",
-                        "Qxd8 wins the Queen."
-                    ]
-                }
-            }
+            1. Analyze the game using the "Context" (Structure/Sector) data.
+            2. **IDENTIFY PLANS:** Look at the 'Sector' (Kingside/Queenside) and 'Structure' (Open/Closed).
+            3. **OUTPUT PLAN:** In the JSON, output a short 'plan_name' (e.g. "Kingside Attack") for every move.
+            4. **NARRATE THE LINE:** Explain *pv_explanation*.
             
-            **Rules:**
-            - "pv_explanation" should be an ARRAY of strings. Each string corresponds to one move in the best line (1st move, 2nd move, etc.).
-            - Keep explanations short and punchy.
-            - Only generate "pv_explanation" for Mistakes, Misses, and Blunders.
-
-            **Game Data:**
-            ${gameLog}
-            `;
+            **JSON OUTPUT:** { "12": { "analysis": "...", "plan_name": "Center Control", "pv_explanation": ["..."] } }
+            **Data:** ${gameLog}`;
 
             try {
-                const response = await fetch(MODEL_ENDPOINT + `?key=${apiKey}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ parts: [{ text: prompt }] }],
-                        generationConfig: { response_mime_type: "application/json" }
-                    })
-                });
-
+                const response = await fetch(MODEL_ENDPOINT + `?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { response_mime_type: "application/json" } }) });
                 const data = await response.json();
-                if(data.error) throw new Error(data.error.message);
-                
-                const jsonText = data.candidates[0].content.parts[0].text;
-                geminiComments = JSON.parse(jsonText);
-                
-            } catch (e) {
-                console.error("Gemini Error:", e);
-                geminiComments = { 1: { analysis: "Analysis complete." } };
-            }
+                geminiComments = JSON.parse(data.candidates[0].content.parts[0].text);
+            } catch (e) { console.error(e); geminiComments = { 1: { analysis: "Analysis complete." } }; }
         }
 
-        // --- 9. CHAT ---
+        function initStockfish() { try { const blob = new Blob([`importScripts('${STOCKFISH_URL}');`], {type: 'application/javascript'}); stockfish = new Worker(URL.createObjectURL(blob)); stockfish.postMessage('uci'); } catch (e) { console.error(e); } }
+        function handleChatEnter(e) { if(e.key === 'Enter') sendChatMessage(); }
         async function sendChatMessage() {
-            const input = document.getElementById('chatInput');
-            const text = input.value;
-            const apiKey = localStorage.getItem('gemini_api_key');
-            
-            if(!apiKey) { alert("Please save API key first"); return; }
-            if(!text) return;
-
-            const chatHistory = document.getElementById('chatHistory');
-            chatHistory.innerHTML += `<div class="bg-indigo-50 p-2 rounded mb-2 text-right"><b>You:</b> ${text}</div>`;
+            const input = document.getElementById('chatInput'); const text = input.value; const apiKey = localStorage.getItem('gemini_api_key');
+            if(!apiKey || !text) return;
+            document.getElementById('chatHistory').innerHTML += `<div class="bg-indigo-50 p-2 rounded mb-2 text-right"><b>You:</b> ${text}</div>`;
             input.value = "";
-            chatHistory.scrollTop = chatHistory.scrollHeight;
-
-            const prompt = `
-            Context: Chess Game PGN: ${game.pgn()}
-            Current Board FEN: ${game.fen()}
-            Current Move Index: ${currentMoveIndex} (Move ${Math.floor(currentMoveIndex/2)+1})
-            User Question: ${text}
-            
-            Answer as a Chess Coach. Use the FEN to describe specific piece locations.
-            `;
-
+            const prompt = `Context: PGN: ${game.pgn()} FEN: ${game.fen()} Question: ${text}`;
             try {
-                const response = await fetch(MODEL_ENDPOINT + `?key=${apiKey}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-                });
+                const response = await fetch(MODEL_ENDPOINT + `?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }) });
                 const data = await response.json();
                 const reply = data.candidates[0].content.parts[0].text;
-                
-                chatHistory.innerHTML += `<div class="text-left mb-2 text-gray-700"><b>Coach:</b> ${marked.parse(reply)}</div>`;
-                chatHistory.scrollTop = chatHistory.scrollHeight;
+                document.getElementById('chatHistory').innerHTML += `<div class="text-left mb-2 text-gray-700"><b>Coach:</b> ${marked.parse(reply)}</div>`;
+            } catch (e) {}
+        }
 
-            } catch (e) {
-                chatHistory.innerHTML += `<div class="text-red-500 text-xs">Error contacting Coach. Check API Key.</div>`;
+        // --- NAVIGATION ---
+        function updateUI() {
+            if(pvState.active) return;
+            if(retryState.enabled && !retryState.active && analysisData[currentMoveIndex]) {
+                const data = analysisData[currentMoveIndex];
+                const focus = document.getElementById('analysisFocus').value;
+                const isMyMove = (focus === 'both') || (focus === data.color);
+                if (isMyMove && ["Mistake", "Blunder", "Miss"].includes(data.classification)) { enterRetryMode(data); return; }
             }
+            board.position(game.fen());
+            const turn = game.turn();
+            document.getElementById('turnIndicator').className = `w-3 h-3 rounded-full border-2 border-black ${turn === 'w' ? 'bg-white' : 'bg-black'}`;
+            updateCoachBox(); updateEvalBar(); updateThreatMap();
+        }
+        function nextMove() { if(!pvState.active && !retryState.active && currentMoveIndex < gameHistory.length -1) { currentMoveIndex++; game.move(gameHistory[currentMoveIndex]); updateUI(); }}
+        function prevMove() { if(!pvState.active && !retryState.active && currentMoveIndex >= 0) { game.undo(); currentMoveIndex--; updateUI(); }}
+        function goToStart() { if(!pvState.active && !retryState.active) { game.reset(); currentMoveIndex = -1; updateUI(); }}
+        function goToEnd() { if(!pvState.active && !retryState.active) { while(currentMoveIndex < gameHistory.length -1) { currentMoveIndex++; game.move(gameHistory[currentMoveIndex]); } updateUI(); }}
+
+        function updateCoachBox() {
+            if(pvState.active) return;
+            const contentDiv = document.getElementById('feedbackContent');
+            const placeholder = document.getElementById('feedbackPlaceholder');
+            const box = document.getElementById('coachBox');
+            const badge = document.getElementById('moveClassBadge');
+            const planBadge = document.getElementById('strategicPlan');
+            const planText = document.getElementById('planText');
+            const suggestionDiv = document.getElementById('bestMoveSuggestion');
+            const bestMoveText = document.getElementById('bestMoveText');
+            const openingName = document.getElementById('openingName');
+
+            if (analysisData.length === 0) { contentDiv.classList.add('hidden'); placeholder.classList.remove('hidden'); box.className = 'coach-box p-4 rounded-r-lg shadow-sm flex flex-col justify-center'; return; }
+            if (currentMoveIndex === -1) { contentDiv.classList.add('hidden'); placeholder.classList.remove('hidden'); placeholder.innerHTML = "Start of Game"; return; }
+            contentDiv.classList.remove('hidden'); placeholder.classList.add('hidden');
+
+            const data = analysisData[currentMoveIndex];
+            const moveInfo = gameHistory[currentMoveIndex];
+            const moveNum = Math.floor(currentMoveIndex / 2) + 1;
+            const moveNotation = `${moveNum}${moveInfo.color === 'w' ? '.' : '...'} ${moveInfo.san}`;
+
+            badge.innerText = data.classification;
+            badge.className = `classification-badge bg-${data.classification.toLowerCase()}`;
+            box.className = `coach-box ${data.classification.toLowerCase()} p-4 rounded-r-lg shadow-sm flex flex-col justify-center`;
+            
+            openingName.innerText = data.opening || "";
+
+            let comment = geminiComments[currentMoveIndex + 1]; 
+            let mainComment = "Standard move.";
+            let currentPlan = "";
+
+            if (comment) { 
+                if (typeof comment === 'string') mainComment = comment; 
+                else {
+                    mainComment = comment.analysis || mainComment;
+                    currentPlan = comment.plan_name || "";
+                }
+            } else { 
+                if (data.classification === "Best") mainComment = "Excellent find!";
+                else if (data.classification === "Good") mainComment = "Solid move.";
+                else if (data.classification === "Mistake") mainComment = "This loses advantage.";
+                else if (data.classification === "Blunder") mainComment = "Critical error.";
+            }
+            
+            document.getElementById('coachText').innerHTML = marked.parse(mainComment);
+            document.getElementById('moveNumber').innerText = moveNotation;
+            
+            // Update Plan Badge
+            if(currentPlan) {
+                planBadge.classList.remove('hidden');
+                planText.innerText = currentPlan;
+            } else {
+                planBadge.classList.add('hidden');
+            }
+
+            const needsSuggestion = ["Inaccuracy", "Mistake", "Miss", "Blunder"].includes(data.classification);
+            if (needsSuggestion && data.bestMoveSan && data.pv) {
+                suggestionDiv.classList.remove('hidden');
+                bestMoveText.innerText = data.bestMoveSan;
+            } else { suggestionDiv.classList.add('hidden'); }
         }
 
-        function handleChatEnter(e) { if(e.key === 'Enter') sendChatMessage(); }
-
-        // --- SETTINGS ---
-        function saveSettings() {
-            const key = document.getElementById('apiKeyInput').value.trim();
-            if(!key) { alert("Please enter a key."); return; }
-            localStorage.setItem('gemini_api_key', key);
-            document.getElementById('settingsModal').classList.add('hidden');
+        // --- PV LOGIC ---
+        function startPvReview() {
+            if (currentMoveIndex < 0 || !analysisData[currentMoveIndex]) return;
+            const data = analysisData[currentMoveIndex];
+            if (!data.pv) { alert("No line available."); return; }
+            pvState.active = true; pvState.startFen = data.fenBefore; pvState.tempGame = new Chess(data.fenBefore);
+            pvState.currentIndex = -1; pvState.moves = [];
+            const moveStrings = data.pv.split(' ');
+            const limit = Math.min(moveStrings.length, 6);
+            for(let i=0; i<limit; i++) {
+                const m = moveStrings[i]; const from = m.substring(0,2); const to = m.substring(2,4); const promotion = m.length > 4 ? m.substring(4,5) : 'q';
+                const moveObj = pvState.tempGame.move({from, to, promotion}); if(moveObj) pvState.moves.push(moveObj); else break; 
+            }
+            pvState.tempGame.reset(); pvState.tempGame.load(data.fenBefore);
+            pvState.comments = [];
+            const geminiData = geminiComments[currentMoveIndex + 1];
+            if (geminiData && geminiData.pv_explanation) pvState.comments = geminiData.pv_explanation;
+            else pvState.comments = pvState.moves.map((m, i) => i === 0 ? "The engine preferred this start." : "Follow up.");
+            const box = document.getElementById('coachBox'); box.classList.add('pv-active');
+            document.getElementById('board').classList.add('board-pv-highlight');
+            document.getElementById('pvModeBadge').classList.remove('hidden');
+            document.getElementById('mainNavButtons').style.opacity = '0.5'; document.getElementById('mainNavButtons').style.pointerEvents = 'none';
+            document.getElementById('normalFeedback').classList.add('hidden'); document.getElementById('pvControls').classList.remove('hidden'); document.getElementById('pvControls').classList.add('flex');
+            board.position(pvState.startFen); updatePvUI();
+        }
+        function stopPvReview() {
+            pvState.active = false;
+            const box = document.getElementById('coachBox'); box.classList.remove('pv-active');
+            document.getElementById('board').classList.remove('board-pv-highlight');
+            document.getElementById('pvModeBadge').classList.add('hidden');
+            document.getElementById('normalFeedback').classList.remove('hidden');
+            document.getElementById('pvControls').classList.add('hidden'); document.getElementById('pvControls').classList.remove('flex');
+            document.getElementById('mainNavButtons').style.opacity = '1'; document.getElementById('mainNavButtons').style.pointerEvents = 'auto';
+            updateUI();
+        }
+        function nextPvMove() { if(!pvState.active) return; if(pvState.currentIndex < pvState.moves.length -1) { pvState.currentIndex++; const move = pvState.moves[pvState.currentIndex]; pvState.tempGame.move(move); board.position(pvState.tempGame.fen()); updatePvUI(); }}
+        function prevPvMove() { if(!pvState.active) return; if(pvState.currentIndex >= 0) { pvState.tempGame.undo(); pvState.currentIndex--; board.position(pvState.tempGame.fen()); updatePvUI(); }}
+        function updatePvUI() {
+            const indicator = document.getElementById('pvMoveIndicator'); const commentText = document.getElementById('pvCommentText');
+            if (pvState.currentIndex === -1) { indicator.innerText = "Start"; commentText.innerHTML = "<b>Initial Position.</b><br>Click > to see why this is better."; }
+            else { const moveObj = pvState.moves[pvState.currentIndex]; indicator.innerText = `Move ${pvState.currentIndex + 1}`; let comment = pvState.comments[pvState.currentIndex] || "Continuing."; commentText.innerHTML = `<b>${moveObj.san}:</b> ${comment}`; }
         }
 
-        function loadSettings() {
-            const key = localStorage.getItem('gemini_api_key');
-            if(key) document.getElementById('apiKeyInput').value = key;
-        }
-        
-        function openSettings() {
-            loadSettings();
-            document.getElementById('settingsModal').classList.remove('hidden');
-        }
-
+        function saveSettings() { const key = document.getElementById('apiKeyInput').value.trim(); if(key) localStorage.setItem('gemini_api_key', key); document.getElementById('settingsModal').classList.add('hidden'); updateThreatMap(); }
+        function loadSettings() { const key = localStorage.getItem('gemini_api_key'); if(key) document.getElementById('apiKeyInput').value = key; document.getElementById('threatToggle').checked = threatMapEnabled; }
+        function openSettings() { loadSettings(); document.getElementById('settingsModal').classList.remove('hidden'); }
     </script>
 </body>
 </html>
