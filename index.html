@@ -17,7 +17,62 @@
 
     <style>
         body { background-color: #f0f2f5; touch-action: manipulation; font-family: 'Segoe UI', system-ui, sans-serif; }
-        #board { width: 100%; max-width: 450px; margin: 0 auto; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+        
+        /* Board Container Layout - FIXED */
+        .board-container {
+            display: flex;
+            justify-content: center;
+            align-items: stretch;
+            gap: 12px;
+            width: 100%;
+            max-width: 480px;
+            margin: 0 auto;
+        }
+
+        #board { 
+            flex: 1; /* Take remaining space */
+            min-width: 0; /* Critical flexbox fix to allow shrinking */
+            width: 100%; 
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); 
+        }
+
+        /* Eval Bar Styles */
+        .eval-bar-container {
+            flex: 0 0 24px; /* Fixed width, do not grow or shrink */
+            width: 24px;
+            background-color: #374151; /* Dark gray */
+            border-radius: 4px;
+            overflow: hidden;
+            position: relative;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column-reverse; /* Fill from bottom */
+        }
+
+        .eval-bar-fill {
+            width: 100%;
+            background-color: #ffffff; /* White */
+            height: 50%; /* Start at neutral */
+            transition: height 0.5s ease-out;
+            border-top: 1px solid #9ca3af;
+        }
+
+        .eval-score-text {
+            position: absolute;
+            width: 100%;
+            text-align: center;
+            font-size: 9px;
+            font-weight: bold;
+            color: #999;
+            z-index: 10;
+            top: 4px; /* For black advantage text */
+            pointer-events: none;
+        }
+        .eval-score-text.bottom {
+            top: auto;
+            bottom: 4px;
+            color: #333;
+        }
         
         /* Piece Theme Fix */
         .piece-417db { background-size: 100%; }
@@ -58,7 +113,7 @@
     <nav class="bg-indigo-700 text-white p-3 shadow-md sticky top-0 z-50">
         <div class="max-w-2xl mx-auto flex justify-between items-center">
             <h1 class="font-bold text-lg"><i class="fa-solid fa-chess"></i> Chess Coach AI</h1>
-            <button onclick="document.getElementById('settingsModal').classList.remove('hidden')" class="text-white hover:text-indigo-200">
+            <button onclick="openSettings()" class="text-white hover:text-indigo-200">
                 <i class="fa-solid fa-gear"></i>
             </button>
         </div>
@@ -72,11 +127,19 @@
                 <div id="turnIndicator" class="w-3 h-3 rounded-full bg-white border-2 border-black"></div>
                 <span id="gameStatus" class="text-sm font-semibold text-gray-700">Load a game to start</span>
             </div>
-            <div id="evalBar" class="font-mono text-sm bg-gray-800 text-yellow-400 px-2 py-1 rounded">0.00</div>
+            <div id="evalText" class="font-mono text-sm bg-gray-800 text-yellow-400 px-2 py-1 rounded">0.00</div>
         </div>
 
-        <!-- Board Area -->
-        <div class="relative">
+        <!-- Board Area with Eval Bar -->
+        <div class="relative board-container">
+            <!-- Eval Bar -->
+            <div class="eval-bar-container">
+                <div class="eval-score-text" id="evalBarTextTop"></div>
+                <div id="visualEvalBar" class="eval-bar-fill" style="height: 50%;"></div>
+                <div class="eval-score-text bottom" id="evalBarTextBottom"></div>
+            </div>
+
+            <!-- Chess Board -->
             <div id="board"></div>
             
             <!-- Analysis Overlay -->
@@ -141,9 +204,11 @@
             <div class="mb-4">
                 <label class="block text-xs font-bold text-gray-600 mb-1">Gemini API Key</label>
                 <input type="password" id="apiKeyInput" placeholder="Paste key here..." class="w-full border p-2 rounded text-sm">
+                <p class="text-xs text-gray-400 mt-1">Key is saved in browser storage.</p>
             </div>
-            <div class="flex justify-end">
-                <button onclick="saveSettings()" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm font-bold">Save</button>
+            <div class="flex justify-end gap-2">
+                <button onclick="document.getElementById('settingsModal').classList.add('hidden')" class="px-4 py-2 text-gray-600 text-sm">Close</button>
+                <button id="saveKeyBtn" onclick="saveSettings()" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm font-bold">Save Key</button>
             </div>
         </div>
     </div>
@@ -155,7 +220,7 @@
             <textarea id="pgnInput" class="w-full border p-2 h-40 font-mono text-xs rounded mb-4" placeholder="Paste PGN here..."></textarea>
             <div class="flex justify-end gap-2">
                 <button onclick="document.getElementById('pgnModal').classList.add('hidden')" class="px-4 py-2 text-gray-600 text-sm">Cancel</button>
-                <button onclick="loadPGN()" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm font-bold">Load Game</button>
+                <button id="loadPgnBtn" onclick="loadPGN()" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm font-bold">Load Game</button>
             </div>
         </div>
     </div>
@@ -164,7 +229,7 @@
     <button onclick="document.getElementById('pgnModal').classList.remove('hidden')" class="fixed bottom-6 right-6 bg-indigo-600 text-white w-14 h-14 rounded-full shadow-lg flex items-center justify-center hover:bg-indigo-700 z-40 transition-transform hover:scale-110">
         <i class="fa-solid fa-upload text-xl"></i>
     </button>
-
+0
     <script>
         // --- CONSTANTS ---
         const STOCKFISH_URL = 'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js';
@@ -187,13 +252,17 @@
             
             // Show settings if no key
             if (!localStorage.getItem('gemini_api_key')) {
-                document.getElementById('settingsModal').classList.remove('hidden');
+                openSettings();
             }
+
+            // Force resize after short delay to fix layout issues
+            setTimeout(() => {
+                if(board) board.resize();
+            }, 300);
         });
 
         // --- 1. BOARD & PIECES ---
         function pieceTheme(piece) {
-            // FIXED: Using Chess.com CDN for reliable piece loading
             return 'https://images.chesscomfiles.com/chess-themes/pieces/neo/150/' + piece.toLowerCase() + '.png';
         }
 
@@ -208,45 +277,77 @@
 
         // --- 2. STOCKFISH ENGINE ---
         function initStockfish() {
-            const blob = new Blob([`importScripts('${STOCKFISH_URL}');`], {type: 'application/javascript'});
-            stockfish = new Worker(URL.createObjectURL(blob));
-            stockfish.postMessage('uci');
+            try {
+                const blob = new Blob([`importScripts('${STOCKFISH_URL}');`], {type: 'application/javascript'});
+                stockfish = new Worker(URL.createObjectURL(blob));
+                stockfish.postMessage('uci');
+            } catch (e) {
+                console.error("Stockfish init failed:", e);
+                // Fail silently, button will retry
+            }
         }
 
         // --- 3. GAME LOADING ---
         function loadPGN() {
-            const pgn = document.getElementById('pgnInput').value.trim();
-            if (!pgn) return;
+            const btn = document.getElementById('loadPgnBtn');
+            const originalText = btn.innerText;
+            btn.innerText = "Loading...";
 
-            // Attempt to clean PGN (add space after headers)
-            let cleanPgn = pgn;
-            if (!pgn.includes('\n\n') && pgn.includes(']')) {
-                const lastBracket = pgn.lastIndexOf(']');
-                cleanPgn = pgn.substring(0, lastBracket+1) + '\n\n' + pgn.substring(lastBracket+1);
-            }
-
-            const success = game.load_pgn(cleanPgn);
-            if (!success) {
-                // Fallback: try loading just moves
-                const movesOnly = pgn.replace(/\[.*?\]/g, "").trim();
-                if (!game.load_pgn(movesOnly)) {
-                    alert("Invalid PGN. Please check format.");
+            setTimeout(() => {
+                const pgn = document.getElementById('pgnInput').value.trim();
+                if (!pgn) {
+                    btn.innerText = originalText;
                     return;
                 }
-            }
 
-            // Extract history
-            gameHistory = game.history({ verbose: true });
-            
-            // Reset to start
-            game.reset();
-            currentMoveIndex = -1;
-            board.position(game.fen());
-            
-            updateUI();
-            document.getElementById('pgnModal').classList.add('hidden');
-            document.getElementById('gameStatus').innerText = "Game Loaded. Click Review.";
-            document.getElementById('feedbackPlaceholder').innerHTML = '<i class="fa-solid fa-wand-magic-sparkles text-2xl mb-2 text-indigo-500"></i><br>Game Loaded.<br>Click <b>Review</b> for AI Analysis.';
+                try {
+                    // Try standard load
+                    let success = game.load_pgn(pgn);
+                    
+                    // Fallback: Aggressive Cleaning
+                    if (!success) {
+                        // Remove timestamps like {[%clk 0:00:10]}
+                        let cleanPgn = pgn.replace(/\{.*?\}/g, '');
+                        // Remove numeric annotations like $1, $2
+                        cleanPgn = cleanPgn.replace(/\$\d+/g, '');
+                        // Try loading moves only if full PGN fails
+                        if (!game.load_pgn(cleanPgn)) {
+                            // Last resort: regex just the move texts 1. e4 e5
+                            const movesOnly = pgn.replace(/\[.*?\]/g, "").trim();
+                            if (!game.load_pgn(movesOnly)) {
+                                throw new Error("Parse failed");
+                            }
+                        }
+                    }
+
+                    // Extract history
+                    gameHistory = game.history({ verbose: true });
+                    
+                    // Reset to start
+                    game.reset();
+                    currentMoveIndex = -1;
+                    board.position(game.fen());
+                    
+                    // Clear previous analysis
+                    analysisData = [];
+                    geminiComments = {};
+                    
+                    updateUI();
+                    document.getElementById('pgnModal').classList.add('hidden');
+                    document.getElementById('gameStatus').innerText = "Game Loaded. Click Review.";
+                    document.getElementById('feedbackPlaceholder').innerHTML = '<i class="fa-solid fa-wand-magic-sparkles text-2xl mb-2 text-indigo-500"></i><br>Game Loaded.<br>Click <b>Review</b> for AI Analysis.';
+                    document.getElementById('pgnInput').value = ''; // Clear input
+                    
+                    // Resize again just in case
+                    setTimeout(() => board.resize(), 100);
+
+                } catch (e) {
+                    alert("Invalid PGN. Please paste a standard PGN format.");
+                    console.error(e);
+                } finally {
+                    btn.innerText = originalText;
+                }
+            }, 50); // Small delay to allow UI update
         }
 
         // --- 4. NAVIGATION ---
@@ -260,6 +361,9 @@
 
             // Coach Box Update
             updateCoachBox();
+            
+            // Update Eval Bar
+            updateEvalBar();
         }
 
         function nextMove() {
@@ -292,7 +396,46 @@
             updateUI();
         }
 
-        // --- 5. COACH BOX LOGIC ---
+        // --- 5. COACH BOX & EVAL LOGIC ---
+        function updateEvalBar() {
+            let evalVal = 0.00;
+            const barFill = document.getElementById('visualEvalBar');
+            const evalText = document.getElementById('evalText');
+            
+            // If we have analysis data for this move
+            if (currentMoveIndex >= 0 && analysisData[currentMoveIndex]) {
+                const data = analysisData[currentMoveIndex];
+                if (typeof data.eval === 'string' && data.eval.startsWith('M')) {
+                    // Mate detected
+                    const mateIn = parseInt(data.eval.substring(1));
+                    evalVal = mateIn > 0 ? 10 : -10; // Cap visual for mate
+                    evalText.innerText = `M${mateIn}`;
+                } else {
+                    evalVal = parseFloat(data.eval);
+                    evalText.innerText = evalVal.toFixed(2);
+                }
+            } else {
+                evalText.innerText = "0.00";
+            }
+
+            // Calculate height percentage (sigmoid-ish or clamped linear)
+            // Clamp eval between -5 and +5 for visual display
+            const clampedEval = Math.max(-5, Math.min(5, evalVal));
+            // Map -5..5 to 0..100%
+            const percentage = 50 + (clampedEval * 10); 
+            
+            barFill.style.height = `${percentage}%`;
+            
+            // Text color logic for bar
+            if(evalVal > 0.5) {
+                barFill.style.backgroundColor = '#ffffff'; // White winning
+            } else if (evalVal < -0.5) {
+                barFill.style.backgroundColor = '#1f2937'; // Black winning (visually dark inside bar)
+            } else {
+                barFill.style.backgroundColor = '#9ca3af'; // Neutral
+            }
+        }
+
         function updateCoachBox() {
             const contentDiv = document.getElementById('feedbackContent');
             const placeholder = document.getElementById('feedbackPlaceholder');
@@ -333,9 +476,8 @@
             box.className = `coach-box ${data.classification.toLowerCase()} p-4 rounded-r-lg shadow-sm min-h-[140px] flex flex-col justify-center`;
 
             // 3. Gemini Commentary (or fallback)
-            let comment = geminiComments[currentMoveIndex + 1]; // Gemini often uses 1-based indexing for moves
+            let comment = geminiComments[currentMoveIndex + 1]; 
             if (!comment) {
-                // Fallback heuristic text
                 if (data.classification === "Best") comment = "Excellent find! This is the top engine move.";
                 else if (data.classification === "Good") comment = "Solid move. Maintains the position.";
                 else if (data.classification === "Mistake") comment = "This creates some problems. The evaluation dropped.";
@@ -352,16 +494,17 @@
             } else {
                 suggestionDiv.classList.add('hidden');
             }
-
-            // Update Eval Bar
-            document.getElementById('evalBar').innerText = data.eval;
         }
 
 
         // --- 6. ANALYSIS PIPELINE ---
         async function startAnalysis() {
             const apiKey = localStorage.getItem('gemini_api_key');
-            if (!apiKey) { alert("Missing API Key!"); return; }
+            if (!apiKey) { 
+                alert("Please add your Gemini API Key in settings first."); 
+                openSettings();
+                return; 
+            }
 
             // UI Setup
             const overlay = document.getElementById('analysisOverlay');
@@ -386,12 +529,24 @@
                 const result = await runStockfish(tempGame.fen());
                 
                 // Classify Move
-                const currentEvalVal = parseFloat(result.eval) || 0; // Handle "M3" later
-                const delta = (move.color === 'w') ? (currentEvalVal - prevEval) : (prevEval - currentEvalVal);
-                
+                let currentEvalVal = 0;
+                if(result.eval.startsWith("M")) {
+                    currentEvalVal = result.eval.includes("-") ? -10 : 10;
+                } else {
+                    currentEvalVal = parseFloat(result.eval);
+                }
+
+                // Calculate Eval Delta
+                let delta = 0;
+                if (move.color === 'w') {
+                    delta = currentEvalVal - prevEval;
+                } else {
+                    delta = prevEval - currentEvalVal; 
+                }
+
                 let classification = "Neutral";
-                if (i < 8) classification = "Book"; // Simplify opening
-                else if (delta > 0.5) classification = "Best"; // Opponent blundered? or we found gain
+                if (i < 8 && Math.abs(currentEvalVal) < 0.5) classification = "Book"; 
+                else if (delta > 0.5) classification = "Best"; 
                 else if (delta > -0.3) classification = "Good";
                 else if (delta > -1.0) classification = "Mistake";
                 else classification = "Blunder";
@@ -411,325 +566,177 @@
 
             // 2. GEMINI PASS (Get JSON comments)
             document.getElementById('geminiStatus').classList.remove('hidden');
-            document.getElementById('progressText').innerTe        <!-- Actions -->
-        <button onclick="startFullAnalysis()" id="analyzeBtn" class="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold shadow-lg hover:bg-indigo-700 active:transform active:scale-95 flex items-center justify-center gap-2">
-            <i class="fa-solid fa-magnifying-glass-chart"></i> Review Full Game (Pro)
-        </button>
-
-        <!-- Chat Section (Hidden until analysis is done) -->
-        <div id="chatSection" class="hidden bg-white rounded-lg shadow-md border border-gray-200 overflow-hidden flex flex-col h-[500px]">
-            <div class="bg-indigo-50 p-3 border-b flex justify-between items-center">
-                <span class="font-bold text-indigo-900">♟️ Coach Gemini 3</span>
-                <select id="persona" class="text-xs border rounded p-1">
-                    <option value="coach">Helpful Coach</option>
-                    <option value="roast">Roaster</option>
-                    <option value="grandmaster">Grandmaster</option>
-                </select>
-            </div>
+            document.getElementById('progressText').innerText = "Gemini is writing commentary...";
             
-            <div id="chatHistory" class="p-4 flex flex-col gap-2 bg-gray-50 flex-1 overflow-y-auto">
-                <!-- Messages go here -->
-            </div>
+            await getGeminiCommentary(apiKey);
 
-            <div class="p-3 bg-white border-t flex gap-2">
-                <input type="text" id="userPrompt" placeholder="Ask about the game..." class="flex-1 border rounded px-3 py-2 text-sm focus:outline-none focus:border-indigo-500" onkeypress="handleEnter(event)">
-                <button onclick="sendUserMessage()" class="bg-indigo-600 text-white px-4 rounded hover:bg-indigo-700"><i class="fa-solid fa-paper-plane"></i></button>
-            </div>
-        </div>
-
-    </div>
-
-    <!-- PGN Modal -->
-    <div id="fenModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
-        <div class="bg-white p-4 rounded-lg w-11/12 max-w-md">
-            <h3 class="font-bold mb-2">Load Game</h3>
-            <textarea id="pgnInput" class="w-full border p-2 h-32 text-xs font-mono mb-2" placeholder="Paste PGN here..."></textarea>
-            <div class="text-red-500 text-xs mb-2 hidden" id="loadError">Invalid format</div>
-            <div class="flex justify-end gap-2">
-                <button onclick="closeFenDialog()" class="px-3 py-1 bg-gray-200 rounded">Cancel</button>
-                <button onclick="loadPgnOrFen()" class="px-3 py-1 bg-indigo-600 text-white rounded">Load</button>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        // --- CONFIG & STATE ---
-        const STOCKFISH_URL = 'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js';
-        
-        // ** UPDATED TO GEMINI 3 PRO PREVIEW **
-        const MODEL_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent';
-        
-        let board = null;
-        let game = new Chess();
-        let stockfish = null;
-        let currentEval = "0.00";
-        let engineReady = false;
-        
-        let chatSession = []; 
-
-        // --- INIT ---
-        const savedKey = localStorage.getItem("gemini_api_key");
-        if(savedKey) document.getElementById('apiKeyInput').value = savedKey;
-
-        document.getElementById('apiKeyInput').addEventListener('input', (e) => {
-            localStorage.setItem("gemini_api_key", e.target.value);
-        });
-
-        // --- ENGINE SETUP ---
-        const workerBlob = new Blob([`importScripts('${STOCKFISH_URL}');`], { type: 'application/javascript' });
-        const workerUrl = URL.createObjectURL(workerBlob);
-        
-        try {
-            stockfish = new Worker(workerUrl);
-            stockfish.postMessage('uci');
-            
-            stockfish.addEventListener('message', function(e) {
-                const line = e.data;
-                if(line === 'readyok') engineReady = true;
-                if (!window.isAnalyzing && line.includes('cp ')) {
-                   const match = line.match(/cp (-?\d+)/);
-                   if (match) updateEvalBox(parseInt(match[1]));
-                }
-            });
-        } catch (e) { console.error(e); }
-
-        function updateEvalBox(cp) {
-            const score = (game.turn() === 'w' ? cp : -cp) / 100;
-            currentEval = (score > 0 ? "+" : "") + score.toFixed(2);
-            document.getElementById('evalBox').innerText = currentEval;
-        }
-
-        // --- BOARD LOGIC ---
-        function onDragStart(source, piece) {
-            if (game.game_over()) return false;
-            if ((game.turn() === 'w' && piece.search(/^b/) !== -1) ||
-                (game.turn() === 'b' && piece.search(/^w/) !== -1)) return false;
-        }
-
-        function onDrop(source, target) {
-            const move = game.move({ from: source, to: target, promotion: 'q' });
-            if (move === null) return 'snapback';
-            updateStatus();
-            stockfish.postMessage('position fen ' + game.fen());
-            stockfish.postMessage('go depth 10');
-        }
-
-        function onSnapEnd() { board.position(game.fen()); }
-
-        board = Chessboard('board', {
-            draggable: true,
-            position: 'start',
-            onDragStart: onDragStart,
-            onDrop: onDrop,
-            onSnapEnd: onSnapEnd
-        });
-        window.addEventListener('resize', board.resize);
-
-        function updateStatus() {
-            let status = '';
-            const moveColor = (game.turn() === 'b') ? 'Black' : 'White';
-            if (game.in_checkmate()) status = 'Checkmate! ' + moveColor + ' loses.';
-            else if (game.in_draw()) status = 'Draw.';
-            else {
-                status = moveColor + ' to move';
-                if (game.in_check()) status += ' (Check)';
-            }
-            document.getElementById('status').innerText = status;
-        }
-
-        // --- BATCH ANALYSIS LOGIC ---
-        window.isAnalyzing = false;
-
-        async function startFullAnalysis() {
-            const apiKey = document.getElementById('apiKeyInput').value.trim();
-            if (!apiKey) { alert("Please enter API Key first."); return; }
-
-            window.isAnalyzing = true;
-            document.getElementById('analysisOverlay').classList.remove('hidden');
-            document.getElementById('chatSection').classList.add('hidden');
-            document.getElementById('analyzeBtn').disabled = true;
-            
-            const history = game.history({ verbose: true });
-            const tempGame = new Chess();
-            let analysisLog = "GAME ANALYSIS LOG (Format: Move# Move Eval BestMove):\n";
-            
-            for (let i = 0; i < history.length; i++) {
-                const move = history[i];
-                tempGame.move(move.san);
-                const fen = tempGame.fen();
-                
-                const pct = Math.round(((i + 1) / history.length) * 100);
-                document.getElementById('progressBar').style.width = pct + "%";
-                document.getElementById('progressText').innerText = `Analyzing move ${i+1}/${history.length}...`;
-                
-                const result = await getEngineAnalysis(fen);
-                
-                const moveNum = Math.floor(i/2) + 1;
-                const turn = move.color === 'w' ? '.' : '...';
-                analysisLog += `${moveNum}${turn} ${move.san} {Eval: ${result.eval}, EngineRec: ${result.bestMove}}\n`;
-            }
-
-            window.isAnalyzing = false;
-            document.getElementById('analysisOverlay').classList.add('hidden');
+            // Finish
+            overlay.classList.add('hidden');
             document.getElementById('analyzeBtn').disabled = false;
-            document.getElementById('chatSection').classList.remove('hidden');
-            document.getElementById('chatSection').scrollIntoView({ behavior: 'smooth' });
-
-            initGeminiChat(analysisLog);
+            
+            // Refresh UI
+            if(currentMoveIndex === -1) nextMove(); 
+            else updateUI();
         }
 
-        function getEngineAnalysis(fen) {
-            return new Promise((resolve) => {
+        function runStockfish(fen) {
+            return new Promise(resolve => {
+                // Ensure worker is alive
+                if (!stockfish) initStockfish();
+
                 stockfish.postMessage('stop');
                 stockfish.postMessage('position fen ' + fen);
                 stockfish.postMessage('go depth 12'); 
 
-                let bestMove = "-";
-                let evaluation = "0.00";
+                let best = "-";
+                let evalScore = "0.00";
 
-                const listener = function(e) {
+                const listener = (e) => {
                     const line = e.data;
                     if (line.includes('cp ')) {
                         const match = line.match(/cp (-?\d+)/);
-                        if(match) evaluation = (parseInt(match[1]) / 100).toFixed(2);
-                    } else if (line.includes('mate ')) {
+                        if(match) {
+                            let score = parseInt(match[1]) / 100;
+                            // Stockfish cp is perspective of side to move. Convert to White Perspective.
+                            const side = fen.split(' ')[1];
+                            if (side === 'b') score = -score;
+                            
+                            evalScore = score.toFixed(2);
+                        }
+                    }
+                    if (line.includes('mate ')) {
                         const match = line.match(/mate (-?\d+)/);
-                        if(match) evaluation = "M" + match[1];
+                        if(match) evalScore = "M" + match[1];
                     }
                     if (line.startsWith('bestmove')) {
-                        bestMove = line.split(' ')[1];
+                        best = line.split(' ')[1]; 
                         stockfish.removeEventListener('message', listener);
-                        resolve({ eval: evaluation, bestMove: bestMove });
+                        resolve({ eval: evalScore, bestMove: best }); 
                     }
                 };
                 stockfish.addEventListener('message', listener);
             });
         }
 
-        // --- GEMINI CHAT LOGIC ---
-        async function initGeminiChat(analysisData) {
-            const persona = document.getElementById('persona').value;
-            let systemPrompt = "You are a chess coach. Use the provided Engine Analysis Log to summarize the game.";
-            
-            if (persona === 'roast') systemPrompt = "You are a ruthless chess roaster (like GothamChess). Roast the players based on the Engine Analysis Log.";
-            if (persona === 'grandmaster') systemPrompt = "You are a GM. Analyze the game deeply using the Engine Log.";
+        // --- 7. GEMINI API (JSON MODE) ---
+        async function getGeminiCommentary(apiKey) {
+            // Prepare data
+            let gameLog = "";
+            analysisData.forEach((d, i) => {
+                if(d.classification === "Mistake" || d.classification === "Blunder" || d.classification === "Best") {
+                    gameLog += `Move ${i+1}: ${d.san} (Eval: ${d.eval}, Class: ${d.classification})\n`;
+                }
+            });
 
-            const initialMessage = `
-            ${systemPrompt}
+            if(!gameLog) gameLog = "Game was very balanced.";
+
+            const prompt = `
+            You are a Chess Coach. Here is the data for a chess game.
+            Return a JSON object where keys are the Move Number (1, 2, 3...) and values are short, helpful 1-sentence comments for that move.
+            Focus on Mistakes and Blunders. explain WHY it is bad.
             
-            [GAME PGN]
-            ${game.pgn()}
-            
-            [ENGINE ANALYSIS LOG]
-            ${analysisData}
-            
-            Please provide a summary of the game, focusing on key turning points.
+            Game Data:
+            ${gameLog}
+
+            Output JSON Format:
+            {
+                "15": "This exposes your king. You should have castled.",
+                "22": "Brilliant sacrifice!"
+            }
             `;
 
-            chatSession = [
-                { role: "user", parts: [{ text: initialMessage }] }
-            ];
-
-            const historyDiv = document.getElementById('chatHistory');
-            historyDiv.innerHTML = '';
-            addMessageToUi("Analyzing game data with Gemini 3 Pro...", "ai");
-
-            await callGeminiApi();
-        }
-
-        async function sendUserMessage() {
-            const input = document.getElementById('userPrompt');
-            const text = input.value.trim();
-            if (!text) return;
-
-            addMessageToUi(text, "user");
-            chatSession.push({ role: "user", parts: [{ text: text }] });
-            input.value = '';
-
-            addMessageToUi("Thinking...", "ai", true); 
-            await callGeminiApi();
-        }
-
-        async function callGeminiApi() {
-            const apiKey = document.getElementById('apiKeyInput').value;
-            const historyDiv = document.getElementById('chatHistory');
-
             try {
-                // ** UPDATED API CALL USING HEADER AUTH **
-                const response = await fetch(MODEL_ENDPOINT, {
+                const response = await fetch(MODEL_ENDPOINT + `?key=${apiKey}`, {
                     method: 'POST',
-                    headers: { 
-                        'Content-Type': 'application/json',
-                        'x-goog-api-key': apiKey  // Header authentication matches your curl
+                    headers: {
+                        'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ contents: chatSession })
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: prompt }] }],
+                        generationConfig: { response_mime_type: "application/json" }
+                    })
                 });
 
                 const data = await response.json();
+                if(data.error) throw new Error(data.error.message);
                 
-                const loader = document.getElementById('loading-msg');
-                if(loader) loader.remove();
+                const jsonText = data.candidates[0].content.parts[0].text;
+                geminiComments = JSON.parse(jsonText);
+                
+            } catch (e) {
+                console.error("Gemini Error:", e);
+            }
+        }
 
-                if (data.error) {
-                    addMessageToUi("Error: " + data.error.message, "ai");
-                    return;
-                }
+        // --- 8. CHAT ---
+        async function sendChatMessage() {
+            const input = document.getElementById('chatInput');
+            const text = input.value;
+            const apiKey = localStorage.getItem('gemini_api_key');
+            
+            if(!apiKey) { alert("Please save API key first"); return; }
+            if(!text) return;
 
-                const aiText = data.candidates[0].content.parts[0].text;
+            const chatHistory = document.getElementById('chatHistory');
+            chatHistory.innerHTML += `<div class="bg-indigo-50 p-2 rounded mb-2 text-right"><b>You:</b> ${text}</div>`;
+            input.value = "";
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+
+            const prompt = `
+            Context: Chess Game PGN: ${game.pgn()}
+            Current Move Index: ${currentMoveIndex} (Move ${Math.floor(currentMoveIndex/2)+1})
+            User Question: ${text}
+            Answer as a Chess Coach.
+            `;
+
+            try {
+                const response = await fetch(MODEL_ENDPOINT + `?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                });
+                const data = await response.json();
+                const reply = data.candidates[0].content.parts[0].text;
                 
-                chatSession.push({ role: "model", parts: [{ text: aiText }] });
-                
-                if (chatSession.length === 2) historyDiv.innerHTML = ''; 
-                
-                addMessageToUi(aiText, "ai");
+                chatHistory.innerHTML += `<div class="text-left mb-2 text-gray-700"><b>Coach:</b> ${marked.parse(reply)}</div>`;
+                chatHistory.scrollTop = chatHistory.scrollHeight;
 
             } catch (e) {
-                addMessageToUi("Network Error: " + e.message, "ai");
+                chatHistory.innerHTML += `<div class="text-red-500 text-xs">Error contacting Coach. Check API Key.</div>`;
             }
         }
 
-        function addMessageToUi(text, role, isLoading = false) {
-            const div = document.createElement('div');
-            div.className = `msg ${role === 'user' ? 'user-msg' : 'ai-msg'} flex flex-col`;
-            if (isLoading) div.id = 'loading-msg';
+        function handleChatEnter(e) { if(e.key === 'Enter') sendChatMessage(); }
+
+        // --- SETTINGS ---
+        function saveSettings() {
+            const key = document.getElementById('apiKeyInput').value.trim();
+            if(!key) { alert("Please enter a key."); return; }
             
-            const formattedText = text.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>');
-            div.innerHTML = formattedText;
+            localStorage.setItem('gemini_api_key', key);
             
-            const historyDiv = document.getElementById('chatHistory');
-            historyDiv.appendChild(div);
-            historyDiv.scrollTop = historyDiv.scrollHeight;
+            const btn = document.getElementById('saveKeyBtn');
+            const originalText = btn.innerText;
+            btn.innerText = "Saved!";
+            btn.classList.replace('bg-indigo-600', 'bg-green-600');
+            
+            setTimeout(() => {
+                document.getElementById('settingsModal').classList.add('hidden');
+                btn.innerText = originalText;
+                btn.classList.replace('bg-green-600', 'bg-indigo-600');
+            }, 1000);
         }
 
-        function handleEnter(e) {
-            if (e.key === 'Enter') sendUserMessage();
+        function loadSettings() {
+            const key = localStorage.getItem('gemini_api_key');
+            if(key) document.getElementById('apiKeyInput').value = key;
         }
-
-        // --- UTILS ---
-        function resetGame() {
-            game.reset();
-            board.start();
-            updateStatus();
-            document.getElementById('chatSection').classList.add('hidden');
-        }
-        function flipBoard() { board.flip(); }
-        function undoMove() { game.undo(); board.position(game.fen()); updateStatus(); }
-        function showFenDialog() { document.getElementById('fenModal').classList.remove('hidden'); }
-        function closeFenDialog() { document.getElementById('fenModal').classList.add('hidden'); }
         
-        function loadPgnOrFen() {
-            let input = document.getElementById('pgnInput').value.trim();
-            if (!input) return;
-            game.reset();
-            let result = game.load_pgn(input) || game.load(input);
-            if (result) {
-                board.position(game.fen());
-                updateStatus();
-                closeFenDialog();
-            } else {
-                document.getElementById('loadError').classList.remove('hidden');
-            }
+        function openSettings() {
+            loadSettings();
+            document.getElementById('settingsModal').classList.remove('hidden');
         }
+
     </script>
 </body>
 </html>
