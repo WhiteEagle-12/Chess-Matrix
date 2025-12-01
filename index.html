@@ -47,6 +47,7 @@
             pointer-events: none; 
             z-index: 20; 
         }
+        
         .heat-square { width: 100%; height: 100%; transition: background-color 0.2s; }
 
         .eval-bar-container {
@@ -309,76 +310,6 @@
         }
         function flipBoard() { if(board) board.flip(); updateThreatMap(); }
 
-        // --- GAME LOADING ---
-        function loadPGN() {
-            const btn = document.getElementById('loadPgnBtn');
-            const originalText = btn.innerText;
-            btn.innerText = "Loading...";
-            
-            // Force reset of all states
-            isAnalyzing = false;
-            stopPvReview();
-            giveUpRetry();
-            document.getElementById('analysisOverlay').classList.add('hidden');
-
-            setTimeout(() => {
-                const rawPgn = document.getElementById('pgnInput').value.trim();
-                if (!rawPgn) {
-                    btn.innerText = originalText;
-                    return;
-                }
-
-                try {
-                    // 1. Try Standard Load
-                    let success = game.load_pgn(rawPgn);
-                    
-                    // 2. Fallback: Aggressive Cleaning
-                    if (!success) {
-                        // Remove headers [Event ...]
-                        let clean = rawPgn.replace(/\[.*?\]/g, "");
-                        // Remove comments { ... }
-                        clean = clean.replace(/\{.*?\}/g, "");
-                        // Remove variations ( ... )
-                        clean = clean.replace(/\(.*?\)/g, "");
-                        // Remove NAGs $1
-                        clean = clean.replace(/\$\d+/g, "");
-                        // Remove move numbers 1. 
-                        // clean = clean.replace(/\d+\./g, ""); // Chess.js needs numbers sometimes? No, usually fine.
-                        // Actually chess.js handles numbers fine, but variations kill it.
-                        
-                        clean = clean.trim();
-                        
-                        if (!game.load_pgn(clean)) {
-                            throw new Error("Parse failed");
-                        }
-                    }
-
-                    gameHistory = game.history({ verbose: true });
-                    game.reset();
-                    currentMoveIndex = -1;
-                    board.position(game.fen());
-                    board.orientation('white'); 
-                    
-                    analysisData = [];
-                    geminiComments = {};
-                    
-                    updateUI();
-                    document.getElementById('pgnModal').classList.add('hidden');
-                    document.getElementById('gameStatus').innerText = "Game Loaded. Click Review.";
-                    document.getElementById('feedbackPlaceholder').innerHTML = '<i class="fa-solid fa-wand-magic-sparkles text-2xl mb-2 text-indigo-500"></i><br>Game Loaded.<br>Click <b>Review</b> for AI Analysis.';
-                    document.getElementById('pgnInput').value = ''; 
-                    
-                    setTimeout(() => board.resize(), 100);
-
-                } catch (e) {
-                    alert("Invalid PGN. Please ensure it is a valid game record.");
-                    console.error(e);
-                } finally {
-                    btn.innerText = originalText;
-                }
-            }, 50);
-        }
-
         // --- RETRY LOGIC ---
         function onDragStart(source, piece) {
             if (!retryState.active) return false;
@@ -416,10 +347,8 @@
         }
         function giveUpRetry() {
             retryState.active = false;
-            if(analysisData[currentMoveIndex]) {
-                const data = analysisData[currentMoveIndex];
-                game.load(data.fen); board.position(data.fen);
-            }
+            const data = analysisData[currentMoveIndex];
+            game.load(data.fen); board.position(data.fen);
             document.getElementById('board').classList.remove('board-retry-highlight');
             document.getElementById('retryModeBadge').classList.add('hidden');
             document.getElementById('normalFeedback').classList.remove('hidden');
@@ -457,6 +386,79 @@
                 const gameB = new Chess(fenBase + "b" + fenEnd); gameB.moves({verbose:true}).forEach(m => counts[m.to] -= 1);
             } catch(e) {}
             return counts;
+        }
+
+        // --- GAME LOADING ---
+        function loadPGN() {
+            const btn = document.getElementById('loadPgnBtn');
+            const originalText = btn.innerText;
+            btn.innerText = "Loading...";
+            
+            // Hard reset
+            isAnalyzing = false;
+            stopPvReview();
+            if(retryState.active) giveUpRetry();
+            document.getElementById('analysisOverlay').classList.add('hidden');
+
+            setTimeout(() => {
+                const rawPgn = document.getElementById('pgnInput').value.trim();
+                if (!rawPgn) { btn.innerText = originalText; return; }
+
+                try {
+                    // BRUTE FORCE PARSER: Ignores headers, comments, variations
+                    // 1. Remove [Headers]
+                    let clean = rawPgn.replace(/\[[^\]]*\]/g, ' ');
+                    // 2. Remove {Comments}
+                    clean = clean.replace(/\{[^\}]*\}/g, ' ');
+                    // 3. Remove (Variations) - Simple recursive depth 1
+                    clean = clean.replace(/\([^\)]*\)/g, ' ');
+                    // 4. Remove NAGs ($1) and Move Numbers (1.)
+                    clean = clean.replace(/\$\d+/g, ' ').replace(/\d+\.+/g, ' ');
+                    
+                    // 5. Tokenize
+                    const tokens = clean.split(/\s+/).filter(t => t.length > 1 && !/^\d/.test(t));
+                    
+                    // 6. Play Moves
+                    game.reset();
+                    for(const token of tokens) {
+                        // Attempt move
+                        const move = game.move(token);
+                        // If invalid, stop or ignore? Better to stop to avoid junk.
+                        if(!move) {
+                            // Maybe it's "1-0" result? Ignore.
+                            if(token === '1-0' || token === '0-1' || token === '1/2-1/2') continue;
+                            // Otherwise probably done
+                            break; 
+                        }
+                    }
+
+                    gameHistory = game.history({ verbose: true });
+                    
+                    if(gameHistory.length === 0) throw new Error("No moves found");
+
+                    game.reset();
+                    currentMoveIndex = -1;
+                    board.position(game.fen());
+                    board.orientation('white'); 
+                    
+                    analysisData = [];
+                    geminiComments = {};
+                    
+                    updateUI();
+                    document.getElementById('pgnModal').classList.add('hidden');
+                    document.getElementById('gameStatus').innerText = "Game Loaded. Click Review.";
+                    document.getElementById('feedbackPlaceholder').innerHTML = '<i class="fa-solid fa-wand-magic-sparkles text-2xl mb-2 text-indigo-500"></i><br>Game Loaded.<br>Click <b>Review</b> for AI Analysis.';
+                    document.getElementById('pgnInput').value = ''; 
+                    
+                    setTimeout(() => board.resize(), 100);
+
+                } catch (e) {
+                    alert("PGN Error: Could not parse moves. Try pasting just the move list (1. e4 e5 ...)");
+                    console.error(e);
+                } finally {
+                    btn.innerText = originalText;
+                }
+            }, 100); // 100ms delay to allow UI to render "Loading"
         }
 
         // --- PLAN & CLUSTERING ALGORITHMS ---
