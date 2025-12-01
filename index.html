@@ -551,10 +551,17 @@
         // Helper: Convert UCI string (e2e4 g8f6) to SAN string (1. e4 Nf6 2...)
         function uciToSan(fen, pvString) {
             if (!pvString) return "";
+            
+            // Safe Move Count Parsing
+            let moveCount = 1;
+            const parts = fen.split(' ');
+            if (parts.length >= 6) {
+                moveCount = parseInt(parts[5]);
+            }
+            
             const temp = new Chess(fen);
             const moves = pvString.split(' ');
             let sanStr = "";
-            let moveCount = temp.moveNumber();
             
             for (let i = 0; i < moves.length; i++) {
                 const m = moves[i];
