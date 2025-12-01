@@ -18,7 +18,7 @@
     <style>
         body { background-color: #f0f2f5; touch-action: manipulation; font-family: 'Segoe UI', system-ui, sans-serif; }
         
-        /* Board Container Layout - FIXED */
+        /* Board Container Layout */
         .board-container {
             display: flex;
             justify-content: center;
@@ -258,7 +258,7 @@
                 openSettings();
             }
 
-            // Force resize after short delay to fix layout issues
+            // Force resize
             setTimeout(() => {
                 if(board) board.resize();
             }, 300);
@@ -387,14 +387,33 @@
             const barFill = document.getElementById('visualEvalBar');
             const evalText = document.getElementById('evalText');
             
+            // Use the "pre-move" eval for the *next* move if available, 
+            // or the current move's eval relative to white.
+            // Actually, we store "eval" as the evaluation of the position *before* the move was made.
+            // So if currentMoveIndex is 0 (after 1. e4), we want the eval of the board *after* e4.
+            // That corresponds to analysisData[1].eval (eval before 2nd move).
+            // But if we are at the end, we don't have analysisData[last+1].
+            
+            // Simpler: Just allow the eval to be slighty lagged or store "post-move" eval too.
+            // For now, let's use the stored eval.
             if (currentMoveIndex >= 0 && analysisData[currentMoveIndex]) {
                 const data = analysisData[currentMoveIndex];
-                if (typeof data.eval === 'string' && data.eval.startsWith('M')) {
-                    const mateIn = parseInt(data.eval.substring(1));
+                // Note: The data.eval we stored is the eval BEFORE the move.
+                // But usually users want to see the eval of the CURRENT board.
+                // We'll use a trick: If we have next move data, use that eval (it's the eval of this position).
+                // If not, we might be at end of game.
+                
+                let displayEval = data.eval;
+                if(currentMoveIndex + 1 < analysisData.length) {
+                     displayEval = analysisData[currentMoveIndex + 1].eval;
+                }
+
+                if (typeof displayEval === 'string' && displayEval.startsWith('M')) {
+                    const mateIn = parseInt(displayEval.substring(1));
                     evalVal = mateIn > 0 ? 10 : -10; 
                     evalText.innerText = `M${mateIn}`;
                 } else {
-                    evalVal = parseFloat(data.eval);
+                    evalVal = parseFloat(displayEval);
                     evalText.innerText = evalVal.toFixed(2);
                 }
             } else {
@@ -460,7 +479,8 @@
             document.getElementById('moveNumber').innerText = moveNotation;
 
             if (data.classification === "Mistake" || data.classification === "Blunder") {
-                suggestionDiv.innerHTML = `Running Stockfish again would suggest: <b>${data.bestMove}</b>`;
+                // Now data.bestMove is the CORRECT alternative for the player
+                suggestionDiv.innerHTML = `Running Stockfish again would suggest: <b>${data.bestMoveSan || data.bestMove}</b>`;
                 suggestionDiv.classList.remove('hidden');
             } else {
                 suggestionDiv.classList.add('hidden');
@@ -492,55 +512,134 @@
             document.getElementById('progressBar').className = "h-full bg-indigo-500 transition-all duration-300";
 
             const tempGame = new Chess();
-            let prevEval = 0.0;
+            let prevEval = 0.0; // Eval of board BEFORE move
             analysisData = [];
 
             try {
                 // 1. ENGINE PASS
+                // Loop through all moves to reconstruct the game
                 for (let i = 0; i < gameHistory.length; i++) {
-                    if (!isAnalyzing) return; // Allow cancellation
+                    if (!isAnalyzing) return; 
 
                     const move = gameHistory[i];
-                    tempGame.move(move.san);
                     
+                    // A. PRE-MOVE ANALYSIS (The "Suggestion" Phase)
+                    // We analyze the board BEFORE making the move to see what the BEST move was.
                     const pct = Math.round(((i + 1) / gameHistory.length) * 100);
                     document.getElementById('progressBar').style.width = pct + "%";
                     document.getElementById('progressText').innerText = `Stockfish: Move ${i+1}/${gameHistory.length}`;
 
-                    const result = await runStockfish(tempGame.fen());
+                    const preMoveResult = await runStockfish(tempGame.fen());
                     
-                    let currentEvalVal = 0;
-                    if(result.eval.startsWith("M")) {
-                        currentEvalVal = result.eval.includes("-") ? -10 : 10;
-                    } else {
-                        currentEvalVal = parseFloat(result.eval);
+                    // Convert UCI best move to SAN for display
+                    let bestMoveSan = preMoveResult.bestMove;
+                    if(preMoveResult.bestMove && preMoveResult.bestMove !== '-') {
+                        const from = preMoveResult.bestMove.substring(0,2);
+                        const to = preMoveResult.bestMove.substring(2,4);
+                        const promotion = preMoveResult.bestMove.length > 4 ? preMoveResult.bestMove.substring(4,5) : undefined;
+                        
+                        // Use a dummy move to get SAN notation
+                        const moveObj = tempGame.move({ from, to, promotion });
+                        if(moveObj) {
+                            bestMoveSan = moveObj.san;
+                            tempGame.undo(); // Undo the test move
+                        }
                     }
 
-                    let delta = 0;
-                    if (move.color === 'w') {
-                        delta = currentEvalVal - prevEval;
-                    } else {
-                        delta = prevEval - currentEvalVal; 
+                    // B. MAKE THE ACTUAL MOVE
+                    tempGame.move(move.san);
+                    
+                    // C. DETERMINE QUALITY
+                    // Logic: 
+                    // 1. preMoveResult.eval is the score of the position assuming BEST play (e.g. +1.0).
+                    // 2. We need the score of the position AFTER the actual move.
+                    //    However, running Stockfish twice per move is slow.
+                    //    Optimization: We can infer the quality by comparing this turn's Pre-Move Eval
+                    //    with the NEXT turn's Pre-Move Eval (flipped).
+                    //    BUT for now, let's keep it simple and just rely on the stored 'eval' 
+                    //    from the PREVIOUS turn (which represents the board state) vs current.
+                    
+                    // Actually, to get true Delta, we need one more eval or a look-ahead structure.
+                    // Let's store the Pre-Move Eval in the array.
+                    // Later, we can calculate delta by traversing the array.
+                    
+                    // Store RAW data first
+                    analysisData.push({
+                        fenBefore: tempGame.fen(), // actually this is fen AFTER
+                        eval: preMoveResult.eval, // Eval of position BEFORE move
+                        bestMove: preMoveResult.bestMove,
+                        bestMoveSan: bestMoveSan,
+                        san: move.san,
+                        color: move.color
+                    });
+                }
+
+                // D. POST-PROCESSING (Calculate Deltas & Classify)
+                // Now we have an array of "Ideal Evals" for each position before the move.
+                // Move 0 (White): Ideal Eval +0.2. White plays.
+                // Move 1 (Black): Ideal Eval +0.1 (White's advantage shrunk slightly).
+                // Note: Stockfish evals are usually "Side to move".
+                // If Move 0 (White) says +0.2.
+                // If Move 1 (Black) says +0.2 (Black is up 0.2). Then White blundered heavily (went from +0.2 to -0.2).
+                
+                // Let's classify based on the array
+                for (let i = 0; i < analysisData.length; i++) {
+                    const current = analysisData[i];
+                    
+                    // Normalize Eval to White's perspective
+                    let currentEvalW = parseFloat(current.eval);
+                    if(current.color === 'b') currentEvalW = -currentEvalW; // If black to move, + means Black adv, so - for White
+                    if(current.eval.startsWith('M')) currentEvalW = current.eval.includes('-') ? -100 : 100; // Rough mate score
+
+                    // Get Next Position's eval (Result of the move)
+                    let nextEvalW = currentEvalW; // Default if end of game
+                    if (i + 1 < analysisData.length) {
+                        const next = analysisData[i+1];
+                        let nextRaw = parseFloat(next.eval);
+                        if(next.eval.startsWith('M')) nextRaw = next.eval.includes('-') ? -100 : 100;
+                        
+                        // Next is Black to move. If Stockfish says +0.5 (Black adv), then White score is -0.5.
+                        // Wait, my logic above: "If black to move, + means Black adv".
+                        // So for `next` (opposing color), we assume stockfish output was relative to them.
+                        if(next.color === 'b') nextEvalW = -nextRaw;
+                        else nextEvalW = nextRaw;
                     }
 
+                    // Delta: Did the eval drop for the player who moved?
+                    // If White moved: We want NextEvalW to be >= CurrentEvalW.
+                    // Delta = NextEvalW - CurrentEvalW.
+                    // If Black moved: We want NextEvalW to be <= CurrentEvalW (more negative).
+                    // Actually, simpler: Always look at "Score from Mover's Perspective".
+                    
+                    let scoreBefore = parseFloat(current.eval); // Relative to mover
+                    if(current.eval.startsWith('M')) scoreBefore = current.eval.includes('-') ? -10 : 10;
+                    
+                    let scoreAfter = scoreBefore; // Default
+                    if (i + 1 < analysisData.length) {
+                        const next = analysisData[i+1];
+                        let nextRaw = parseFloat(next.eval); // Relative to opponent
+                        if(next.eval.startsWith('M')) nextRaw = next.eval.includes('-') ? -10 : 10;
+                        scoreAfter = -nextRaw; // Invert to get Mover's perspective
+                    }
+
+                    const delta = scoreAfter - scoreBefore;
+                    
                     let classification = "Neutral";
-                    if (i < 8 && Math.abs(currentEvalVal) < 0.5) classification = "Book"; 
-                    else if (delta > 0.5) classification = "Best"; 
-                    else if (delta > -0.3) classification = "Good";
-                    else if (delta > -1.0) classification = "Mistake";
+                    if (i < 8 && Math.abs(delta) > -0.5) classification = "Book"; 
+                    else if (delta > 0.5) classification = "Best"; // somehow improved pos (opponent blunder unseen by engine prev depth?)
+                    else if (delta > -0.5) classification = "Good";
+                    else if (delta > -1.5) classification = "Mistake";
                     else classification = "Blunder";
 
-                    if (move.san === result.bestMove) classification = "Best";
-
-                    analysisData.push({
-                        eval: result.eval,
-                        bestMove: result.bestMove,
-                        classification: classification,
-                        san: move.san
-                    });
-
-                    prevEval = currentEvalVal;
+                    if (current.san === current.bestMoveSan) classification = "Best";
+                    
+                    // Update the object
+                    analysisData[i].classification = classification;
+                    
+                    // Fix display eval to be White-relative for UI consistency
+                    analysisData[i].eval = currentEvalW.toFixed(2);
                 }
+
 
                 // 2. GEMINI PASS
                 if (!isAnalyzing) return;
@@ -556,12 +655,10 @@
                 console.error("Analysis failed:", err);
                 alert("An error occurred during analysis: " + err.message);
             } finally {
-                // ALWAYS close the overlay, even if error occurred
                 overlay.classList.add('hidden');
                 document.getElementById('analyzeBtn').disabled = false;
                 isAnalyzing = false;
                 
-                // Refresh UI if we have data
                 if (analysisData.length > 0) {
                    if(currentMoveIndex === -1) nextMove(); 
                    else updateUI();
@@ -575,8 +672,8 @@
 
                 // Timeout safety mechanism
                 const timeoutId = setTimeout(() => {
-                    resolve({ eval: "0.00", bestMove: "-" }); // Default fallback if engine hangs
-                }, 2000); // 2 second max per move
+                    resolve({ eval: "0.00", bestMove: "-" }); 
+                }, 2000); 
 
                 stockfish.postMessage('stop');
                 stockfish.postMessage('position fen ' + fen);
@@ -591,8 +688,7 @@
                         const match = line.match(/cp (-?\d+)/);
                         if(match) {
                             let score = parseInt(match[1]) / 100;
-                            const side = fen.split(' ')[1];
-                            if (side === 'b') score = -score;
+                            // KEEP RELATIVE TO SIDE TO MOVE for logic
                             evalScore = score.toFixed(2);
                         }
                     }
@@ -601,7 +697,7 @@
                         if(match) evalScore = "M" + match[1];
                     }
                     if (line.startsWith('bestmove')) {
-                        clearTimeout(timeoutId); // Clear timeout since we finished
+                        clearTimeout(timeoutId); 
                         best = line.split(' ')[1]; 
                         stockfish.removeEventListener('message', listener);
                         resolve({ eval: evalScore, bestMove: best }); 
@@ -616,7 +712,7 @@
             let gameLog = "";
             analysisData.forEach((d, i) => {
                 if(d.classification === "Mistake" || d.classification === "Blunder" || d.classification === "Best") {
-                    gameLog += `Move ${i+1}: ${d.san} (Eval: ${d.eval}, Class: ${d.classification})\n`;
+                    gameLog += `Move ${i+1}: ${d.san} (Eval: ${d.eval}, Class: ${d.classification}, Better: ${d.bestMoveSan})\n`;
                 }
             });
 
@@ -625,740 +721,7 @@
             const prompt = `
             You are a Chess Coach. Here is the data for a chess game.
             Return a JSON object where keys are the Move Number (1, 2, 3...) and values are short, helpful 1-sentence comments for that move.
-            Focus on Mistakes and Blunders. explain WHY it is bad.
-            
-            Game Data:
-            ${gameLog}
-
-            Output JSON Format:
-            {
-                "15": "This exposes your king. You should have castled.",
-                "22": "Brilliant sacrifice!"
-            }
-            `;
-
-            try {
-                const response = await fetch(MODEL_ENDPOINT + `?key=${apiKey}`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        contents: [{ parts: [{ text: prompt }] }],
-                        generationConfig: { response_mime_type: "application/json" }
-                    })
-                });
-
-                const data = await response.json();
-                if(data.error) throw new Error(data.error.message);
-                
-                const jsonText = data.candidates[0].content.parts[0].text;
-                geminiComments = JSON.parse(jsonText);
-                
-            } catch (e) {
-                console.error("Gemini Error:", e);
-            }
-        }
-
-        // --- 8. CHAT ---
-        async function sendChatMessage() {
-            const input = document.getElementById('chatInput');
-            const text = input.value;
-            const apiKey = localStorage.getItem('gemini_api_key');
-            
-            if(!apiKey) { alert("Please save API key first"); return; }
-            if(!text) return;
-
-            const chatHistory = document.getElementById('chatHistory');
-            chatHistory.innerHTML += `<div class="bg-indigo-50 p-2 rounded mb-2 text-right"><b>You:</b> ${text}</div>`;
-            input.value = "";
-            chatHistory.scrollTop = chatHistory.scrollHeight;
-
-            const prompt = `
-            Context: Chess Game PGN: ${game.pgn()}
-            Current Move Index: ${currentMoveIndex} (Move ${Math.floor(currentMoveIndex/2)+1})
-            User Question: ${text}
-            Answer as a Chess Coach.
-            `;
-
-            try {
-                const response = await fetch(MODEL_ENDPOINT + `?key=${apiKey}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-                });
-                const data = await response.json();
-                const reply = data.candidates[0].content.parts[0].text;
-                
-                chatHistory.innerHTML += `<div class="text-left mb-2 text-gray-700"><b>Coach:</b> ${marked.parse(reply)}</div>`;
-                chatHistory.scrollTop = chatHistory.scrollHeight;
-
-            } catch (e) {
-                chatHistory.innerHTML += `<div class="text-red-500 text-xs">Error contacting Coach. Check API Key.</div>`;
-            }
-        }
-
-        function handleChatEnter(e) { if(e.key === 'Enter') sendChatMessage(); }
-
-        // --- SETTINGS ---
-        function saveSettings() {
-            const key = document.getElementById('apiKeyInput').value.trim();
-            if(!key) { alert("Please enter a key."); return; }
-            
-            localStorage.setItem('gemini_api_key', key);
-            
-            const btn = document.getElementById('saveKeyBtn');
-            const originalText = btn.innerText;
-            btn.innerText = "Saved!";
-            btn.classList.replace('bg-indigo-600', 'bg-green-600');
-            
-            setTimeout(() => {
-                document.getElementById('settingsModal').classList.add('hidden');
-                btn.innerText = originalText;
-                btn.classList.replace('bg-green-600', 'bg-indigo-600');
-            }, 1000);
-        }
-
-        function loadSettings() {
-            const key = localStorage.getItem('gemini_api_key');
-            if(key) document.getElementById('apiKeyInput').value = key;
-        }
-        
-        function openSettings() {
-            loadSettings();
-            document.getElementById('settingsModal').classList.remove('hidden');
-        }
-
-    </script>
-</body>
-</html><!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Gemini Chess Coach Pro</title>
-    
-    <!-- Dependencies -->
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
-    <script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
-    
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-
-    <style>
-        body { background-color: #f0f2f5; touch-action: manipulation; font-family: 'Segoe UI', system-ui, sans-serif; }
-        
-        /* Board Container Layout - FIXED */
-        .board-container {
-            display: flex;
-            justify-content: center;
-            align-items: stretch;
-            gap: 12px;
-            width: 100%;
-            max-width: 480px;
-            margin: 0 auto;
-        }
-
-        #board { 
-            flex: 1; 
-            min-width: 0; 
-            width: 100%; 
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); 
-        }
-
-        /* Eval Bar Styles */
-        .eval-bar-container {
-            flex: 0 0 24px;
-            width: 24px;
-            background-color: #374151; 
-            border-radius: 4px;
-            overflow: hidden;
-            position: relative;
-            box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
-            display: flex;
-            flex-direction: column-reverse;
-        }
-
-        .eval-bar-fill {
-            width: 100%;
-            background-color: #ffffff;
-            height: 50%;
-            transition: height 0.5s ease-out;
-            border-top: 1px solid #9ca3af;
-        }
-
-        .eval-score-text {
-            position: absolute;
-            width: 100%;
-            text-align: center;
-            font-size: 9px;
-            font-weight: bold;
-            color: #999;
-            z-index: 10;
-            top: 4px;
-            pointer-events: none;
-        }
-        .eval-score-text.bottom {
-            top: auto;
-            bottom: 4px;
-            color: #333;
-        }
-        
-        /* Piece Theme Fix */
-        .piece-417db { background-size: 100%; }
-
-        /* Coach Box Styles */
-        .coach-box {
-            background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-            border-left: 5px solid #cbd5e1;
-            transition: all 0.3s ease;
-        }
-        .coach-box.best { border-left-color: #22c55e; background: #f0fdf4; }
-        .coach-box.good { border-left-color: #84cc16; }
-        .coach-box.mistake { border-left-color: #f59e0b; background: #fffbeb; }
-        .coach-box.blunder { border-left-color: #ef4444; background: #fef2f2; }
-        .coach-box.book { border-left-color: #a855f7; }
-
-        .classification-badge {
-            font-size: 0.7rem; text-transform: uppercase; font-weight: 800; letter-spacing: 0.05em;
-            padding: 2px 6px; border-radius: 4px; color: white; display: inline-block; margin-bottom: 4px;
-        }
-        .bg-best { background-color: #22c55e; }
-        .bg-good { background-color: #84cc16; }
-        .bg-mistake { background-color: #f59e0b; }
-        .bg-blunder { background-color: #ef4444; }
-        .bg-book { background-color: #a855f7; }
-        .bg-neutral { background-color: #94a3b8; }
-
-        /* Custom Scrollbar */
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: #f1f1f1; }
-        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-    </style>
-</head>
-<body class="pb-12">
-
-    <!-- Navbar -->
-    <nav class="bg-indigo-700 text-white p-3 shadow-md sticky top-0 z-50">
-        <div class="max-w-2xl mx-auto flex justify-between items-center">
-            <h1 class="font-bold text-lg"><i class="fa-solid fa-chess"></i> Chess Coach AI</h1>
-            <button onclick="openSettings()" class="text-white hover:text-indigo-200">
-                <i class="fa-solid fa-gear"></i>
-            </button>
-        </div>
-    </nav>
-
-    <div class="max-w-2xl mx-auto p-4 flex flex-col gap-4">
-
-        <!-- Controls / Status -->
-        <div class="flex justify-between items-center bg-white p-3 rounded-lg shadow-sm">
-            <div class="flex items-center gap-3">
-                <div id="turnIndicator" class="w-3 h-3 rounded-full bg-white border-2 border-black"></div>
-                <span id="gameStatus" class="text-sm font-semibold text-gray-700">Load a game to start</span>
-            </div>
-            <div id="evalText" class="font-mono text-sm bg-gray-800 text-yellow-400 px-2 py-1 rounded">0.00</div>
-        </div>
-
-        <!-- Board Area with Eval Bar -->
-        <div class="relative board-container">
-            <!-- Eval Bar -->
-            <div class="eval-bar-container">
-                <div class="eval-score-text" id="evalBarTextTop"></div>
-                <div id="visualEvalBar" class="eval-bar-fill" style="height: 50%;"></div>
-                <div class="eval-score-text bottom" id="evalBarTextBottom"></div>
-            </div>
-
-            <!-- Chess Board -->
-            <div id="board"></div>
-            
-            <!-- Analysis Overlay -->
-            <div id="analysisOverlay" class="absolute inset-0 bg-white/95 z-20 hidden flex flex-col items-center justify-center rounded">
-                <button onclick="cancelAnalysis()" class="absolute top-2 right-2 text-gray-400 hover:text-red-500 p-2">
-                    <i class="fa-solid fa-times text-xl"></i>
-                </button>
-                <div id="statusTitle" class="text-indigo-600 font-bold mb-4 text-lg animate-pulse">Analyzing with Stockfish...</div>
-                <div class="w-64 h-3 bg-gray-200 rounded-full overflow-hidden mb-2">
-                    <div id="progressBar" class="h-full bg-indigo-500 transition-all duration-300" style="width: 0%"></div>
-                </div>
-                <div id="progressText" class="text-xs text-gray-500 font-mono">Move 0/0</div>
-                <div id="geminiStatus" class="text-xs text-purple-600 mt-2 font-bold hidden">Generating Coach Commentary...</div>
-            </div>
-        </div>
-
-        <!-- Navigation Bar -->
-        <div class="grid grid-cols-5 gap-2">
-            <button onclick="goToStart()" class="bg-white p-2 rounded shadow text-gray-600 hover:bg-gray-50"><i class="fa-solid fa-angles-left"></i></button>
-            <button onclick="prevMove()" class="bg-white p-2 rounded shadow text-gray-600 hover:bg-gray-50"><i class="fa-solid fa-angle-left"></i></button>
-            <button onclick="startAnalysis()" id="analyzeBtn" class="bg-indigo-600 text-white font-bold p-2 rounded shadow hover:bg-indigo-700 flex justify-center items-center gap-2">
-                <i class="fa-solid fa-wand-magic-sparkles"></i> Review
-            </button>
-            <button onclick="nextMove()" class="bg-white p-2 rounded shadow text-gray-600 hover:bg-gray-50"><i class="fa-solid fa-angle-right"></i></button>
-            <button onclick="goToEnd()" class="bg-white p-2 rounded shadow text-gray-600 hover:bg-gray-50"><i class="fa-solid fa-angles-right"></i></button>
-        </div>
-
-        <!-- Coach Feedback Box -->
-        <div id="coachBox" class="coach-box p-4 rounded-r-lg shadow-sm min-h-[140px] flex flex-col justify-center">
-            <div id="feedbackPlaceholder" class="text-center text-gray-400 text-sm">
-                <i class="fa-solid fa-comment-dots text-2xl mb-2"></i><br>
-                Press "Review" to get AI coaching.
-            </div>
-            
-            <div id="feedbackContent" class="hidden">
-                <div class="flex justify-between items-start mb-2">
-                    <span id="moveClassBadge" class="classification-badge bg-neutral">Neutral</span>
-                    <span id="moveNumber" class="text-xs text-gray-400 font-mono">1. e4</span>
-                </div>
-                <div id="coachText" class="text-sm text-gray-800 leading-relaxed font-medium"></div>
-                <div id="bestMoveSuggestion" class="text-xs text-gray-500 mt-3 pt-2 border-t border-gray-200">
-                    <!-- Engine suggestion goes here -->
-                </div>
-            </div>
-        </div>
-
-        <!-- Chat / Additional Q&A -->
-        <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-            <div class="bg-gray-50 px-4 py-2 border-b text-xs font-bold text-gray-500 uppercase">Ask the Coach</div>
-            <div id="chatHistory" class="p-4 h-40 overflow-y-auto text-sm space-y-2">
-                <div class="text-gray-400 italic text-center text-xs mt-10">Ask specific questions about the game here...</div>
-            </div>
-            <div class="p-2 border-t flex gap-2 bg-gray-50">
-                <input type="text" id="chatInput" placeholder="Why was that move bad?" class="flex-1 border rounded px-3 py-1 text-sm focus:outline-none focus:border-indigo-500" onkeypress="handleChatEnter(event)">
-                <button onclick="sendChatMessage()" class="bg-indigo-600 text-white px-3 rounded hover:bg-indigo-700"><i class="fa-solid fa-paper-plane"></i></button>
-            </div>
-        </div>
-
-    </div>
-
-    <!-- Settings Modal (API Key) -->
-    <div id="settingsModal" class="fixed inset-0 bg-black/50 z-50 hidden flex items-center justify-center">
-        <div class="bg-white p-6 rounded-lg shadow-xl w-11/12 max-w-sm">
-            <h2 class="text-lg font-bold mb-4">Settings</h2>
-            <div class="mb-4">
-                <label class="block text-xs font-bold text-gray-600 mb-1">Gemini API Key</label>
-                <input type="password" id="apiKeyInput" placeholder="Paste key here..." class="w-full border p-2 rounded text-sm">
-                <p class="text-xs text-gray-400 mt-1">Key is saved in browser storage.</p>
-            </div>
-            <div class="flex justify-end gap-2">
-                <button onclick="document.getElementById('settingsModal').classList.add('hidden')" class="px-4 py-2 text-gray-600 text-sm">Close</button>
-                <button id="saveKeyBtn" onclick="saveSettings()" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm font-bold">Save Key</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- PGN Load Modal -->
-    <div id="pgnModal" class="fixed inset-0 bg-black/50 z-50 hidden flex items-center justify-center">
-        <div class="bg-white p-6 rounded-lg shadow-xl w-11/12 max-w-md">
-            <h2 class="text-lg font-bold mb-2">Load Game</h2>
-            <textarea id="pgnInput" class="w-full border p-2 h-40 font-mono text-xs rounded mb-4" placeholder="Paste PGN here..."></textarea>
-            <div class="flex justify-end gap-2">
-                <button onclick="document.getElementById('pgnModal').classList.add('hidden')" class="px-4 py-2 text-gray-600 text-sm">Cancel</button>
-                <button id="loadPgnBtn" onclick="loadPGN()" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm font-bold">Load Game</button>
-            </div>
-        </div>
-    </div>
-    
-    <!-- Floating Load Button -->
-    <button onclick="document.getElementById('pgnModal').classList.remove('hidden')" class="fixed bottom-6 right-6 bg-indigo-600 text-white w-14 h-14 rounded-full shadow-lg flex items-center justify-center hover:bg-indigo-700 z-40 transition-transform hover:scale-110">
-        <i class="fa-solid fa-upload text-xl"></i>
-    </button>
-
-    <script>
-        // --- CONSTANTS ---
-        const STOCKFISH_URL = 'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js';
-        const MODEL_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent';
-
-        // --- STATE ---
-        let game = new Chess();
-        let board = null;
-        let stockfish = null;
-        let gameHistory = []; 
-        let currentMoveIndex = -1; 
-        let analysisData = []; 
-        let geminiComments = {}; 
-        let isAnalyzing = false;
-
-        // --- INIT ---
-        window.addEventListener('DOMContentLoaded', () => {
-            initBoard();
-            initStockfish();
-            loadSettings();
-            
-            if (!localStorage.getItem('gemini_api_key')) {
-                openSettings();
-            }
-
-            // Force resize after short delay to fix layout issues
-            setTimeout(() => {
-                if(board) board.resize();
-            }, 300);
-        });
-
-        // --- 1. BOARD & PIECES ---
-        function pieceTheme(piece) {
-            return 'https://images.chesscomfiles.com/chess-themes/pieces/neo/150/' + piece.toLowerCase() + '.png';
-        }
-
-        function initBoard() {
-            board = Chessboard('board', {
-                position: 'start',
-                draggable: false, 
-                pieceTheme: pieceTheme
-            });
-            window.addEventListener('resize', board.resize);
-        }
-
-        // --- 2. STOCKFISH ENGINE ---
-        function initStockfish() {
-            try {
-                const blob = new Blob([`importScripts('${STOCKFISH_URL}');`], {type: 'application/javascript'});
-                stockfish = new Worker(URL.createObjectURL(blob));
-                stockfish.postMessage('uci');
-            } catch (e) {
-                console.error("Stockfish init failed:", e);
-            }
-        }
-
-        // --- 3. GAME LOADING ---
-        function loadPGN() {
-            const btn = document.getElementById('loadPgnBtn');
-            const originalText = btn.innerText;
-            btn.innerText = "Loading...";
-
-            setTimeout(() => {
-                const pgn = document.getElementById('pgnInput').value.trim();
-                if (!pgn) {
-                    btn.innerText = originalText;
-                    return;
-                }
-
-                try {
-                    let success = game.load_pgn(pgn);
-                    
-                    if (!success) {
-                        let cleanPgn = pgn.replace(/\{.*?\}/g, '').replace(/\$\d+/g, '');
-                        if (!game.load_pgn(cleanPgn)) {
-                            const movesOnly = pgn.replace(/\[.*?\]/g, "").trim();
-                            if (!game.load_pgn(movesOnly)) {
-                                throw new Error("Parse failed");
-                            }
-                        }
-                    }
-
-                    gameHistory = game.history({ verbose: true });
-                    game.reset();
-                    currentMoveIndex = -1;
-                    board.position(game.fen());
-                    
-                    analysisData = [];
-                    geminiComments = {};
-                    
-                    updateUI();
-                    document.getElementById('pgnModal').classList.add('hidden');
-                    document.getElementById('gameStatus').innerText = "Game Loaded. Click Review.";
-                    document.getElementById('feedbackPlaceholder').innerHTML = '<i class="fa-solid fa-wand-magic-sparkles text-2xl mb-2 text-indigo-500"></i><br>Game Loaded.<br>Click <b>Review</b> for AI Analysis.';
-                    document.getElementById('pgnInput').value = ''; 
-                    
-                    setTimeout(() => board.resize(), 100);
-
-                } catch (e) {
-                    alert("Invalid PGN. Please paste a standard PGN format.");
-                    console.error(e);
-                } finally {
-                    btn.innerText = originalText;
-                }
-            }, 50);
-        }
-
-        // --- 4. NAVIGATION ---
-        function updateUI() {
-            board.position(game.fen());
-            
-            const turn = game.turn();
-            document.getElementById('turnIndicator').className = `w-3 h-3 rounded-full border-2 border-black ${turn === 'w' ? 'bg-white' : 'bg-black'}`;
-
-            updateCoachBox();
-            updateEvalBar();
-        }
-
-        function nextMove() {
-            if (currentMoveIndex < gameHistory.length - 1) {
-                currentMoveIndex++;
-                game.move(gameHistory[currentMoveIndex]);
-                updateUI();
-            }
-        }
-
-        function prevMove() {
-            if (currentMoveIndex >= 0) {
-                game.undo();
-                currentMoveIndex--;
-                updateUI();
-            }
-        }
-
-        function goToStart() {
-            game.reset();
-            currentMoveIndex = -1;
-            updateUI();
-        }
-
-        function goToEnd() {
-            while (currentMoveIndex < gameHistory.length - 1) {
-                currentMoveIndex++;
-                game.move(gameHistory[currentMoveIndex]);
-            }
-            updateUI();
-        }
-
-        // --- 5. COACH BOX & EVAL LOGIC ---
-        function updateEvalBar() {
-            let evalVal = 0.00;
-            const barFill = document.getElementById('visualEvalBar');
-            const evalText = document.getElementById('evalText');
-            
-            if (currentMoveIndex >= 0 && analysisData[currentMoveIndex]) {
-                const data = analysisData[currentMoveIndex];
-                if (typeof data.eval === 'string' && data.eval.startsWith('M')) {
-                    const mateIn = parseInt(data.eval.substring(1));
-                    evalVal = mateIn > 0 ? 10 : -10; 
-                    evalText.innerText = `M${mateIn}`;
-                } else {
-                    evalVal = parseFloat(data.eval);
-                    evalText.innerText = evalVal.toFixed(2);
-                }
-            } else {
-                evalText.innerText = "0.00";
-            }
-
-            const clampedEval = Math.max(-5, Math.min(5, evalVal));
-            const percentage = 50 + (clampedEval * 10); 
-            
-            barFill.style.height = `${percentage}%`;
-            
-            if(evalVal > 0.5) {
-                barFill.style.backgroundColor = '#ffffff'; 
-            } else if (evalVal < -0.5) {
-                barFill.style.backgroundColor = '#1f2937'; 
-            } else {
-                barFill.style.backgroundColor = '#9ca3af'; 
-            }
-        }
-
-        function updateCoachBox() {
-            const contentDiv = document.getElementById('feedbackContent');
-            const placeholder = document.getElementById('feedbackPlaceholder');
-            const box = document.getElementById('coachBox');
-            const badge = document.getElementById('moveClassBadge');
-            const suggestionDiv = document.getElementById('bestMoveSuggestion');
-
-            if (analysisData.length === 0) {
-                contentDiv.classList.add('hidden');
-                placeholder.classList.remove('hidden');
-                box.className = 'coach-box p-4 rounded-r-lg shadow-sm min-h-[140px] flex flex-col justify-center'; 
-                return;
-            }
-
-            if (currentMoveIndex === -1) {
-                contentDiv.classList.add('hidden');
-                placeholder.classList.remove('hidden');
-                placeholder.innerHTML = "Start of Game";
-                return;
-            }
-
-            contentDiv.classList.remove('hidden');
-            placeholder.classList.add('hidden');
-
-            const data = analysisData[currentMoveIndex];
-            const moveInfo = gameHistory[currentMoveIndex];
-            const moveNum = Math.floor(currentMoveIndex / 2) + 1;
-            const moveNotation = `${moveNum}${moveInfo.color === 'w' ? '.' : '...'} ${moveInfo.san}`;
-
-            badge.innerText = data.classification;
-            badge.className = `classification-badge bg-${data.classification.toLowerCase()}`;
-            box.className = `coach-box ${data.classification.toLowerCase()} p-4 rounded-r-lg shadow-sm min-h-[140px] flex flex-col justify-center`;
-
-            let comment = geminiComments[currentMoveIndex + 1]; 
-            if (!comment) {
-                if (data.classification === "Best") comment = "Excellent find! This is the top engine move.";
-                else if (data.classification === "Good") comment = "Solid move. Maintains the position.";
-                else if (data.classification === "Mistake") comment = "This creates some problems. The evaluation dropped.";
-                else if (data.classification === "Blunder") comment = "A critical error! This loses significant material or position.";
-                else comment = "Standard book move.";
-            }
-            document.getElementById('coachText').innerHTML = marked.parse(comment);
-            document.getElementById('moveNumber').innerText = moveNotation;
-
-            if (data.classification === "Mistake" || data.classification === "Blunder") {
-                suggestionDiv.innerHTML = `Running Stockfish again would suggest: <b>${data.bestMove}</b>`;
-                suggestionDiv.classList.remove('hidden');
-            } else {
-                suggestionDiv.classList.add('hidden');
-            }
-        }
-
-        // --- 6. ANALYSIS PIPELINE ---
-        function cancelAnalysis() {
-            isAnalyzing = false;
-            document.getElementById('analysisOverlay').classList.add('hidden');
-            document.getElementById('analyzeBtn').disabled = false;
-        }
-
-        async function startAnalysis() {
-            const apiKey = localStorage.getItem('gemini_api_key');
-            if (!apiKey) { 
-                alert("Please add your Gemini API Key in settings first."); 
-                openSettings();
-                return; 
-            }
-
-            isAnalyzing = true;
-            const overlay = document.getElementById('analysisOverlay');
-            overlay.classList.remove('hidden');
-            document.getElementById('analyzeBtn').disabled = true;
-            document.getElementById('statusTitle').innerText = "Analyzing with Stockfish...";
-            document.getElementById('geminiStatus').classList.add('hidden');
-            document.getElementById('progressBar').style.width = "0%";
-            document.getElementById('progressBar').className = "h-full bg-indigo-500 transition-all duration-300";
-
-            const tempGame = new Chess();
-            let prevEval = 0.0;
-            analysisData = [];
-
-            try {
-                // 1. ENGINE PASS
-                for (let i = 0; i < gameHistory.length; i++) {
-                    if (!isAnalyzing) return; // Allow cancellation
-
-                    const move = gameHistory[i];
-                    tempGame.move(move.san);
-                    
-                    const pct = Math.round(((i + 1) / gameHistory.length) * 100);
-                    document.getElementById('progressBar').style.width = pct + "%";
-                    document.getElementById('progressText').innerText = `Stockfish: Move ${i+1}/${gameHistory.length}`;
-
-                    const result = await runStockfish(tempGame.fen());
-                    
-                    let currentEvalVal = 0;
-                    if(result.eval.startsWith("M")) {
-                        currentEvalVal = result.eval.includes("-") ? -10 : 10;
-                    } else {
-                        currentEvalVal = parseFloat(result.eval);
-                    }
-
-                    let delta = 0;
-                    if (move.color === 'w') {
-                        delta = currentEvalVal - prevEval;
-                    } else {
-                        delta = prevEval - currentEvalVal; 
-                    }
-
-                    let classification = "Neutral";
-                    if (i < 8 && Math.abs(currentEvalVal) < 0.5) classification = "Book"; 
-                    else if (delta > 0.5) classification = "Best"; 
-                    else if (delta > -0.3) classification = "Good";
-                    else if (delta > -1.0) classification = "Mistake";
-                    else classification = "Blunder";
-
-                    if (move.san === result.bestMove) classification = "Best";
-
-                    analysisData.push({
-                        eval: result.eval,
-                        bestMove: result.bestMove,
-                        classification: classification,
-                        san: move.san
-                    });
-
-                    prevEval = currentEvalVal;
-                }
-
-                // 2. GEMINI PASS
-                if (!isAnalyzing) return;
-                
-                document.getElementById('statusTitle').innerText = "Asking Coach...";
-                document.getElementById('geminiStatus').classList.remove('hidden');
-                document.getElementById('progressText').innerText = "AI is writing commentary...";
-                document.getElementById('progressBar').className = "h-full bg-purple-500 transition-all duration-300 animate-pulse";
-                
-                await getGeminiCommentary(apiKey);
-
-            } catch (err) {
-                console.error("Analysis failed:", err);
-                alert("An error occurred during analysis: " + err.message);
-            } finally {
-                // ALWAYS close the overlay, even if error occurred
-                overlay.classList.add('hidden');
-                document.getElementById('analyzeBtn').disabled = false;
-                isAnalyzing = false;
-                
-                // Refresh UI if we have data
-                if (analysisData.length > 0) {
-                   if(currentMoveIndex === -1) nextMove(); 
-                   else updateUI();
-                }
-            }
-        }
-
-        function runStockfish(fen) {
-            return new Promise(resolve => {
-                if (!stockfish) initStockfish();
-
-                // Timeout safety mechanism
-                const timeoutId = setTimeout(() => {
-                    resolve({ eval: "0.00", bestMove: "-" }); // Default fallback if engine hangs
-                }, 2000); // 2 second max per move
-
-                stockfish.postMessage('stop');
-                stockfish.postMessage('position fen ' + fen);
-                stockfish.postMessage('go depth 12'); 
-
-                let best = "-";
-                let evalScore = "0.00";
-
-                const listener = (e) => {
-                    const line = e.data;
-                    if (line.includes('cp ')) {
-                        const match = line.match(/cp (-?\d+)/);
-                        if(match) {
-                            let score = parseInt(match[1]) / 100;
-                            const side = fen.split(' ')[1];
-                            if (side === 'b') score = -score;
-                            evalScore = score.toFixed(2);
-                        }
-                    }
-                    if (line.includes('mate ')) {
-                        const match = line.match(/mate (-?\d+)/);
-                        if(match) evalScore = "M" + match[1];
-                    }
-                    if (line.startsWith('bestmove')) {
-                        clearTimeout(timeoutId); // Clear timeout since we finished
-                        best = line.split(' ')[1]; 
-                        stockfish.removeEventListener('message', listener);
-                        resolve({ eval: evalScore, bestMove: best }); 
-                    }
-                };
-                stockfish.addEventListener('message', listener);
-            });
-        }
-
-        // --- 7. GEMINI API (JSON MODE) ---
-        async function getGeminiCommentary(apiKey) {
-            let gameLog = "";
-            analysisData.forEach((d, i) => {
-                if(d.classification === "Mistake" || d.classification === "Blunder" || d.classification === "Best") {
-                    gameLog += `Move ${i+1}: ${d.san} (Eval: ${d.eval}, Class: ${d.classification})\n`;
-                }
-            });
-
-            if(!gameLog) gameLog = "Game was very balanced.";
-
-            const prompt = `
-            You are a Chess Coach. Here is the data for a chess game.
-            Return a JSON object where keys are the Move Number (1, 2, 3...) and values are short, helpful 1-sentence comments for that move.
-            Focus on Mistakes and Blunders. explain WHY it is bad.
+            Focus on Mistakes and Blunders. explain WHY it is bad and mention the better move.
             
             Game Data:
             ${gameLog}
