@@ -40,7 +40,7 @@
         .eval-bar-container {
             flex: 0 0 24px;
             width: 24px;
-            background-color: #374151; 
+            background-color: #374151; /* Dark gray background (Black winning) */
             border-radius: 4px;
             overflow: hidden;
             position: relative;
@@ -51,7 +51,7 @@
 
         .eval-bar-fill {
             width: 100%;
-            background-color: #ffffff;
+            background-color: #ffffff; /* White foreground (White winning) */
             height: 50%;
             transition: height 0.5s ease-out;
             border-top: 1px solid #9ca3af;
@@ -67,14 +67,14 @@
             z-index: 10;
             top: 4px;
             pointer-events: none;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.8);
         }
         .eval-score-text.bottom {
             top: auto;
             bottom: 4px;
-            color: #333;
+            color: #ccc;
         }
         
-        /* Piece Theme Fix */
         .piece-417db { background-size: 100%; }
 
         /* Coach Box Styles */
@@ -100,7 +100,6 @@
         .bg-book { background-color: #a855f7; }
         .bg-neutral { background-color: #94a3b8; }
 
-        /* Custom Scrollbar */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: #f1f1f1; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
@@ -244,7 +243,7 @@
         let stockfish = null;
         let gameHistory = []; 
         let currentMoveIndex = -1; 
-        let analysisData = []; 
+        let analysisData = []; // { evalAfter, bestMove, classification, ... }
         let geminiComments = {}; 
         let isAnalyzing = false;
 
@@ -387,51 +386,42 @@
             const barFill = document.getElementById('visualEvalBar');
             const evalText = document.getElementById('evalText');
             
-            // Use the "pre-move" eval for the *next* move if available, 
-            // or the current move's eval relative to white.
-            // Actually, we store "eval" as the evaluation of the position *before* the move was made.
-            // So if currentMoveIndex is 0 (after 1. e4), we want the eval of the board *after* e4.
-            // That corresponds to analysisData[1].eval (eval before 2nd move).
-            // But if we are at the end, we don't have analysisData[last+1].
-            
-            // Simpler: Just allow the eval to be slighty lagged or store "post-move" eval too.
-            // For now, let's use the stored eval.
+            // We use 'evalAfter' from the analysis data, which represents the position ON SCREEN.
             if (currentMoveIndex >= 0 && analysisData[currentMoveIndex]) {
                 const data = analysisData[currentMoveIndex];
-                // Note: The data.eval we stored is the eval BEFORE the move.
-                // But usually users want to see the eval of the CURRENT board.
-                // We'll use a trick: If we have next move data, use that eval (it's the eval of this position).
-                // If not, we might be at end of game.
                 
-                let displayEval = data.eval;
-                if(currentMoveIndex + 1 < analysisData.length) {
-                     displayEval = analysisData[currentMoveIndex + 1].eval;
-                }
-
-                if (typeof displayEval === 'string' && displayEval.startsWith('M')) {
-                    const mateIn = parseInt(displayEval.substring(1));
-                    evalVal = mateIn > 0 ? 10 : -10; 
-                    evalText.innerText = `M${mateIn}`;
+                if (typeof data.eval === 'string' && data.eval.startsWith('M')) {
+                    // Mate Logic
+                    const mateIn = parseInt(data.eval.substring(1));
+                    evalVal = mateIn > 0 ? 10 : -10; // Visual Cap
+                    evalText.innerText = `M${Math.abs(mateIn)}`;
                 } else {
-                    evalVal = parseFloat(displayEval);
-                    evalText.innerText = evalVal.toFixed(2);
+                    evalVal = parseFloat(data.eval);
+                    evalText.innerText = Math.abs(evalVal).toFixed(2);
                 }
             } else {
-                evalText.innerText = "0.00";
+                // Start position
+                evalText.innerText = "0.30";
+                evalVal = 0.3;
             }
 
+            // Visual Clamping (-5 to +5)
             const clampedEval = Math.max(-5, Math.min(5, evalVal));
+            // Map to percentage (50% is 0.0)
             const percentage = 50 + (clampedEval * 10); 
             
             barFill.style.height = `${percentage}%`;
             
-            if(evalVal > 0.5) {
-                barFill.style.backgroundColor = '#ffffff'; 
-            } else if (evalVal < -0.5) {
-                barFill.style.backgroundColor = '#1f2937'; 
-            } else {
-                barFill.style.backgroundColor = '#9ca3af'; 
-            }
+            // Color Logic
+            // The Container is Dark Gray (Black). The Fill is White (White).
+            // If White is winning (+), Fill is high (Lots of white).
+            // If Black is winning (-), Fill is low (Lots of dark background).
+            // This is standard chess UI.
+            
+            // Text color adjustments for contrast
+            if (percentage > 90) evalText.style.color = '#333'; // Text inside white area
+            else if (percentage < 10) evalText.style.color = '#fff'; // Text inside black area
+            else evalText.style.color = '#999'; // Neutral
         }
 
         function updateCoachBox() {
@@ -479,8 +469,8 @@
             document.getElementById('moveNumber').innerText = moveNotation;
 
             if (data.classification === "Mistake" || data.classification === "Blunder") {
-                // Now data.bestMove is the CORRECT alternative for the player
-                suggestionDiv.innerHTML = `Running Stockfish again would suggest: <b>${data.bestMoveSan || data.bestMove}</b>`;
+                // Fix: Ensure we suggest the move that WAS available (Pre-Move Best)
+                suggestionDiv.innerHTML = `Better was: <b>${data.bestMoveSan || data.bestMove}</b>`;
                 suggestionDiv.classList.remove('hidden');
             } else {
                 suggestionDiv.classList.add('hidden');
@@ -512,134 +502,87 @@
             document.getElementById('progressBar').className = "h-full bg-indigo-500 transition-all duration-300";
 
             const tempGame = new Chess();
-            let prevEval = 0.0; // Eval of board BEFORE move
+            let evalBefore = 0.30; // Start pos eval (approx)
             analysisData = [];
 
             try {
                 // 1. ENGINE PASS
-                // Loop through all moves to reconstruct the game
                 for (let i = 0; i < gameHistory.length; i++) {
                     if (!isAnalyzing) return; 
 
                     const move = gameHistory[i];
                     
-                    // A. PRE-MOVE ANALYSIS (The "Suggestion" Phase)
-                    // We analyze the board BEFORE making the move to see what the BEST move was.
+                    // A. PRE-MOVE ANALYSIS (What should I have done?)
                     const pct = Math.round(((i + 1) / gameHistory.length) * 100);
                     document.getElementById('progressBar').style.width = pct + "%";
                     document.getElementById('progressText').innerText = `Stockfish: Move ${i+1}/${gameHistory.length}`;
 
                     const preMoveResult = await runStockfish(tempGame.fen());
                     
-                    // Convert UCI best move to SAN for display
+                    // Convert Best Move to SAN
                     let bestMoveSan = preMoveResult.bestMove;
                     if(preMoveResult.bestMove && preMoveResult.bestMove !== '-') {
                         const from = preMoveResult.bestMove.substring(0,2);
                         const to = preMoveResult.bestMove.substring(2,4);
                         const promotion = preMoveResult.bestMove.length > 4 ? preMoveResult.bestMove.substring(4,5) : undefined;
                         
-                        // Use a dummy move to get SAN notation
                         const moveObj = tempGame.move({ from, to, promotion });
                         if(moveObj) {
                             bestMoveSan = moveObj.san;
-                            tempGame.undo(); // Undo the test move
+                            tempGame.undo(); 
                         }
                     }
 
-                    // B. MAKE THE ACTUAL MOVE
+                    // Store Eval Before
+                    let currentEvalBefore = parseEval(preMoveResult.eval, tempGame.turn());
+
+                    // B. MAKE THE MOVE
                     tempGame.move(move.san);
                     
-                    // C. DETERMINE QUALITY
-                    // Logic: 
-                    // 1. preMoveResult.eval is the score of the position assuming BEST play (e.g. +1.0).
-                    // 2. We need the score of the position AFTER the actual move.
-                    //    However, running Stockfish twice per move is slow.
-                    //    Optimization: We can infer the quality by comparing this turn's Pre-Move Eval
-                    //    with the NEXT turn's Pre-Move Eval (flipped).
-                    //    BUT for now, let's keep it simple and just rely on the stored 'eval' 
-                    //    from the PREVIOUS turn (which represents the board state) vs current.
+                    // C. POST-MOVE ANALYSIS (Did I mess up?)
+                    // We run Stockfish AGAIN on the new position to see the Resulting Eval.
+                    const postMoveResult = await runStockfish(tempGame.fen());
+                    let currentEvalAfter = parseEval(postMoveResult.eval, tempGame.turn());
                     
-                    // Actually, to get true Delta, we need one more eval or a look-ahead structure.
-                    // Let's store the Pre-Move Eval in the array.
-                    // Later, we can calculate delta by traversing the array.
+                    // Calculate Delta (From perspective of person who MOVED)
+                    // If White Moved: Delta = EvalAfter - EvalBefore
+                    // If Black Moved: Delta = EvalBefore - EvalAfter (since neg is good for black)
                     
-                    // Store RAW data first
+                    // Wait, standard convention: + is good for White.
+                    // If White moves:
+                    // Before: +1.0. After: +0.2. Delta = -0.8 (Bad)
+                    // If Black moves:
+                    // Before: +1.0. After: +5.0. Delta = +4.0 (for White). Means Black blunder.
+                    // Black wants to make number SMALLER.
+                    // Delta for Black = (Before - After).
+                    // Before +1.0. After +5.0. 1 - 5 = -4. (Bad for Black).
+                    // Before +1.0. After -1.0. 1 - (-1) = +2. (Good for Black).
+                    
+                    let delta = 0;
+                    if (move.color === 'w') {
+                        delta = currentEvalAfter - currentEvalBefore;
+                    } else {
+                        delta = currentEvalBefore - currentEvalAfter;
+                    }
+
+                    let classification = "Neutral";
+                    if (i < 8 && Math.abs(delta) > -0.5) classification = "Book"; 
+                    else if (delta > 0.5) classification = "Best"; // Improved position
+                    else if (delta > -0.5) classification = "Good";
+                    else if (delta > -2.0) classification = "Mistake";
+                    else classification = "Blunder";
+
+                    if (move.san === bestMoveSan) classification = "Best";
+                    
                     analysisData.push({
-                        fenBefore: tempGame.fen(), // actually this is fen AFTER
-                        eval: preMoveResult.eval, // Eval of position BEFORE move
+                        eval: currentEvalAfter.toFixed(2), // We store the AFTER eval for the bar
                         bestMove: preMoveResult.bestMove,
                         bestMoveSan: bestMoveSan,
                         san: move.san,
-                        color: move.color
+                        color: move.color,
+                        classification: classification
                     });
                 }
-
-                // D. POST-PROCESSING (Calculate Deltas & Classify)
-                // Now we have an array of "Ideal Evals" for each position before the move.
-                // Move 0 (White): Ideal Eval +0.2. White plays.
-                // Move 1 (Black): Ideal Eval +0.1 (White's advantage shrunk slightly).
-                // Note: Stockfish evals are usually "Side to move".
-                // If Move 0 (White) says +0.2.
-                // If Move 1 (Black) says +0.2 (Black is up 0.2). Then White blundered heavily (went from +0.2 to -0.2).
-                
-                // Let's classify based on the array
-                for (let i = 0; i < analysisData.length; i++) {
-                    const current = analysisData[i];
-                    
-                    // Normalize Eval to White's perspective
-                    let currentEvalW = parseFloat(current.eval);
-                    if(current.color === 'b') currentEvalW = -currentEvalW; // If black to move, + means Black adv, so - for White
-                    if(current.eval.startsWith('M')) currentEvalW = current.eval.includes('-') ? -100 : 100; // Rough mate score
-
-                    // Get Next Position's eval (Result of the move)
-                    let nextEvalW = currentEvalW; // Default if end of game
-                    if (i + 1 < analysisData.length) {
-                        const next = analysisData[i+1];
-                        let nextRaw = parseFloat(next.eval);
-                        if(next.eval.startsWith('M')) nextRaw = next.eval.includes('-') ? -100 : 100;
-                        
-                        // Next is Black to move. If Stockfish says +0.5 (Black adv), then White score is -0.5.
-                        // Wait, my logic above: "If black to move, + means Black adv".
-                        // So for `next` (opposing color), we assume stockfish output was relative to them.
-                        if(next.color === 'b') nextEvalW = -nextRaw;
-                        else nextEvalW = nextRaw;
-                    }
-
-                    // Delta: Did the eval drop for the player who moved?
-                    // If White moved: We want NextEvalW to be >= CurrentEvalW.
-                    // Delta = NextEvalW - CurrentEvalW.
-                    // If Black moved: We want NextEvalW to be <= CurrentEvalW (more negative).
-                    // Actually, simpler: Always look at "Score from Mover's Perspective".
-                    
-                    let scoreBefore = parseFloat(current.eval); // Relative to mover
-                    if(current.eval.startsWith('M')) scoreBefore = current.eval.includes('-') ? -10 : 10;
-                    
-                    let scoreAfter = scoreBefore; // Default
-                    if (i + 1 < analysisData.length) {
-                        const next = analysisData[i+1];
-                        let nextRaw = parseFloat(next.eval); // Relative to opponent
-                        if(next.eval.startsWith('M')) nextRaw = next.eval.includes('-') ? -10 : 10;
-                        scoreAfter = -nextRaw; // Invert to get Mover's perspective
-                    }
-
-                    const delta = scoreAfter - scoreBefore;
-                    
-                    let classification = "Neutral";
-                    if (i < 8 && Math.abs(delta) > -0.5) classification = "Book"; 
-                    else if (delta > 0.5) classification = "Best"; // somehow improved pos (opponent blunder unseen by engine prev depth?)
-                    else if (delta > -0.5) classification = "Good";
-                    else if (delta > -1.5) classification = "Mistake";
-                    else classification = "Blunder";
-
-                    if (current.san === current.bestMoveSan) classification = "Best";
-                    
-                    // Update the object
-                    analysisData[i].classification = classification;
-                    
-                    // Fix display eval to be White-relative for UI consistency
-                    analysisData[i].eval = currentEvalW.toFixed(2);
-                }
-
 
                 // 2. GEMINI PASS
                 if (!isAnalyzing) return;
@@ -666,11 +609,23 @@
             }
         }
 
+        // Helper to normalize eval to White's perspective
+        function parseEval(evalStr, turn) {
+            if (typeof evalStr === 'string' && evalStr.startsWith('M')) {
+                // Mate
+                let val = evalStr.includes('-') ? -100 : 100;
+                // Stockfish mate score is relative to side to move usually?
+                // Actually in runStockfish we normalized it to White already
+                // checking runStockfish...
+                return parseFloat(evalStr.replace('M', '')) > 0 ? 100 : -100; // Simplified
+            }
+            return parseFloat(evalStr);
+        }
+
         function runStockfish(fen) {
             return new Promise(resolve => {
                 if (!stockfish) initStockfish();
 
-                // Timeout safety mechanism
                 const timeoutId = setTimeout(() => {
                     resolve({ eval: "0.00", bestMove: "-" }); 
                 }, 2000); 
@@ -688,13 +643,21 @@
                         const match = line.match(/cp (-?\d+)/);
                         if(match) {
                             let score = parseInt(match[1]) / 100;
-                            // KEEP RELATIVE TO SIDE TO MOVE for logic
+                            // Stockfish UCI is always relative to side to move
+                            const side = fen.split(' ')[1];
+                            if (side === 'b') score = -score;
                             evalScore = score.toFixed(2);
                         }
                     }
                     if (line.includes('mate ')) {
                         const match = line.match(/mate (-?\d+)/);
-                        if(match) evalScore = "M" + match[1];
+                        if(match) {
+                            let mateIn = parseInt(match[1]);
+                            // If side to move (fen) is b, and mate is positive (Black mates), then for White it's negative
+                            const side = fen.split(' ')[1];
+                            if (side === 'b') mateIn = -mateIn;
+                            evalScore = "M" + mateIn;
+                        }
                     }
                     if (line.startsWith('bestmove')) {
                         clearTimeout(timeoutId); 
@@ -711,7 +674,8 @@
         async function getGeminiCommentary(apiKey) {
             let gameLog = "";
             analysisData.forEach((d, i) => {
-                if(d.classification === "Mistake" || d.classification === "Blunder" || d.classification === "Best") {
+                // Send more data for context, even Good moves if they are tactical
+                if(d.classification === "Mistake" || d.classification === "Blunder" || d.classification === "Best" || i % 5 === 0) {
                     gameLog += `Move ${i+1}: ${d.san} (Eval: ${d.eval}, Class: ${d.classification}, Better: ${d.bestMoveSan})\n`;
                 }
             });
@@ -719,17 +683,25 @@
             if(!gameLog) gameLog = "Game was very balanced.";
 
             const prompt = `
-            You are a Chess Coach. Here is the data for a chess game.
-            Return a JSON object where keys are the Move Number (1, 2, 3...) and values are short, helpful 1-sentence comments for that move.
-            Focus on Mistakes and Blunders. explain WHY it is bad and mention the better move.
-            
-            Game Data:
+            You are a Grandmaster Chess Coach. I will provide a list of moves from a game with engine evaluations.
+            Your job is to explain the **Key Moments** (Mistakes, Blunders, Brilliant moves).
+
+            **INSTRUCTIONS:**
+            1. **Be Strategic & Tactical:** Don't just say "eval dropped". Explain WHY.
+               - Example: "This allows a Knight fork on c7."
+               - Example: "This weakens the dark squares around the King."
+               - Example: "You missed a discovered attack on the Queen."
+            2. **Terminology:** Use terms like "Pin", "Fork", "Skewer", "Back-rank mate", "Space advantage", "Isolated pawn".
+            3. **Tone:** Encouraging but strict on blunders.
+            4. **Format:** Return a JSON object. Key = Move Number (1, 2, 3...). Value = The commentary string.
+
+            **Game Data:**
             ${gameLog}
 
-            Output JSON Format:
+            **Output JSON Example:**
             {
-                "15": "This exposes your king. You should have castled.",
-                "22": "Brilliant sacrifice!"
+                "12": "Mistake. pushing f3 weakens your King's diagonal, allowing Qh4+.",
+                "25": "Brilliant! The sacrifice opens the h-file for a mating attack."
             }
             `;
 
@@ -753,6 +725,8 @@
                 
             } catch (e) {
                 console.error("Gemini Error:", e);
+                // Fallback
+                geminiComments = { 1: "Analysis complete. Click through moves to see Engine suggestions." };
             }
         }
 
@@ -774,7 +748,7 @@
             Context: Chess Game PGN: ${game.pgn()}
             Current Move Index: ${currentMoveIndex} (Move ${Math.floor(currentMoveIndex/2)+1})
             User Question: ${text}
-            Answer as a Chess Coach.
+            Answer as a Chess Coach. Focus on strategic concepts (weak squares, piece activity) and tactics.
             `;
 
             try {
