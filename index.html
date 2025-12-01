@@ -243,7 +243,7 @@
         let stockfish = null;
         let gameHistory = []; 
         let currentMoveIndex = -1; 
-        let analysisData = []; // { evalAfter, bestMove, classification, ... }
+        let analysisData = []; 
         let geminiComments = {}; 
         let isAnalyzing = false;
 
@@ -386,42 +386,30 @@
             const barFill = document.getElementById('visualEvalBar');
             const evalText = document.getElementById('evalText');
             
-            // We use 'evalAfter' from the analysis data, which represents the position ON SCREEN.
             if (currentMoveIndex >= 0 && analysisData[currentMoveIndex]) {
                 const data = analysisData[currentMoveIndex];
                 
                 if (typeof data.eval === 'string' && data.eval.startsWith('M')) {
-                    // Mate Logic
                     const mateIn = parseInt(data.eval.substring(1));
-                    evalVal = mateIn > 0 ? 10 : -10; // Visual Cap
+                    evalVal = mateIn > 0 ? 10 : -10; 
                     evalText.innerText = `M${Math.abs(mateIn)}`;
                 } else {
                     evalVal = parseFloat(data.eval);
                     evalText.innerText = Math.abs(evalVal).toFixed(2);
                 }
             } else {
-                // Start position
                 evalText.innerText = "0.30";
                 evalVal = 0.3;
             }
 
-            // Visual Clamping (-5 to +5)
             const clampedEval = Math.max(-5, Math.min(5, evalVal));
-            // Map to percentage (50% is 0.0)
             const percentage = 50 + (clampedEval * 10); 
             
             barFill.style.height = `${percentage}%`;
             
-            // Color Logic
-            // The Container is Dark Gray (Black). The Fill is White (White).
-            // If White is winning (+), Fill is high (Lots of white).
-            // If Black is winning (-), Fill is low (Lots of dark background).
-            // This is standard chess UI.
-            
-            // Text color adjustments for contrast
-            if (percentage > 90) evalText.style.color = '#333'; // Text inside white area
-            else if (percentage < 10) evalText.style.color = '#fff'; // Text inside black area
-            else evalText.style.color = '#999'; // Neutral
+            if (percentage > 90) evalText.style.color = '#333'; 
+            else if (percentage < 10) evalText.style.color = '#fff'; 
+            else evalText.style.color = '#999'; 
         }
 
         function updateCoachBox() {
@@ -469,7 +457,6 @@
             document.getElementById('moveNumber').innerText = moveNotation;
 
             if (data.classification === "Mistake" || data.classification === "Blunder") {
-                // Fix: Ensure we suggest the move that WAS available (Pre-Move Best)
                 suggestionDiv.innerHTML = `Better was: <b>${data.bestMoveSan || data.bestMove}</b>`;
                 suggestionDiv.classList.remove('hidden');
             } else {
@@ -502,7 +489,7 @@
             document.getElementById('progressBar').className = "h-full bg-indigo-500 transition-all duration-300";
 
             const tempGame = new Chess();
-            let evalBefore = 0.30; // Start pos eval (approx)
+            let evalBefore = 0.30; 
             analysisData = [];
 
             try {
@@ -512,14 +499,12 @@
 
                     const move = gameHistory[i];
                     
-                    // A. PRE-MOVE ANALYSIS (What should I have done?)
                     const pct = Math.round(((i + 1) / gameHistory.length) * 100);
                     document.getElementById('progressBar').style.width = pct + "%";
                     document.getElementById('progressText').innerText = `Stockfish: Move ${i+1}/${gameHistory.length}`;
 
                     const preMoveResult = await runStockfish(tempGame.fen());
                     
-                    // Convert Best Move to SAN
                     let bestMoveSan = preMoveResult.bestMove;
                     if(preMoveResult.bestMove && preMoveResult.bestMove !== '-') {
                         const from = preMoveResult.bestMove.substring(0,2);
@@ -533,30 +518,12 @@
                         }
                     }
 
-                    // Store Eval Before
                     let currentEvalBefore = parseEval(preMoveResult.eval, tempGame.turn());
 
-                    // B. MAKE THE MOVE
                     tempGame.move(move.san);
                     
-                    // C. POST-MOVE ANALYSIS (Did I mess up?)
-                    // We run Stockfish AGAIN on the new position to see the Resulting Eval.
                     const postMoveResult = await runStockfish(tempGame.fen());
                     let currentEvalAfter = parseEval(postMoveResult.eval, tempGame.turn());
-                    
-                    // Calculate Delta (From perspective of person who MOVED)
-                    // If White Moved: Delta = EvalAfter - EvalBefore
-                    // If Black Moved: Delta = EvalBefore - EvalAfter (since neg is good for black)
-                    
-                    // Wait, standard convention: + is good for White.
-                    // If White moves:
-                    // Before: +1.0. After: +0.2. Delta = -0.8 (Bad)
-                    // If Black moves:
-                    // Before: +1.0. After: +5.0. Delta = +4.0 (for White). Means Black blunder.
-                    // Black wants to make number SMALLER.
-                    // Delta for Black = (Before - After).
-                    // Before +1.0. After +5.0. 1 - 5 = -4. (Bad for Black).
-                    // Before +1.0. After -1.0. 1 - (-1) = +2. (Good for Black).
                     
                     let delta = 0;
                     if (move.color === 'w') {
@@ -567,7 +534,7 @@
 
                     let classification = "Neutral";
                     if (i < 8 && Math.abs(delta) > -0.5) classification = "Book"; 
-                    else if (delta > 0.5) classification = "Best"; // Improved position
+                    else if (delta > 0.5) classification = "Best"; 
                     else if (delta > -0.5) classification = "Good";
                     else if (delta > -2.0) classification = "Mistake";
                     else classification = "Blunder";
@@ -575,12 +542,13 @@
                     if (move.san === bestMoveSan) classification = "Best";
                     
                     analysisData.push({
-                        eval: currentEvalAfter.toFixed(2), // We store the AFTER eval for the bar
+                        eval: currentEvalAfter.toFixed(2), 
                         bestMove: preMoveResult.bestMove,
                         bestMoveSan: bestMoveSan,
                         san: move.san,
                         color: move.color,
-                        classification: classification
+                        classification: classification,
+                        fen: tempGame.fen() // Capture FEN for Context
                     });
                 }
 
@@ -609,15 +577,9 @@
             }
         }
 
-        // Helper to normalize eval to White's perspective
         function parseEval(evalStr, turn) {
             if (typeof evalStr === 'string' && evalStr.startsWith('M')) {
-                // Mate
-                let val = evalStr.includes('-') ? -100 : 100;
-                // Stockfish mate score is relative to side to move usually?
-                // Actually in runStockfish we normalized it to White already
-                // checking runStockfish...
-                return parseFloat(evalStr.replace('M', '')) > 0 ? 100 : -100; // Simplified
+                return parseFloat(evalStr.replace('M', '')) > 0 ? 100 : -100; 
             }
             return parseFloat(evalStr);
         }
@@ -643,7 +605,6 @@
                         const match = line.match(/cp (-?\d+)/);
                         if(match) {
                             let score = parseInt(match[1]) / 100;
-                            // Stockfish UCI is always relative to side to move
                             const side = fen.split(' ')[1];
                             if (side === 'b') score = -score;
                             evalScore = score.toFixed(2);
@@ -653,7 +614,6 @@
                         const match = line.match(/mate (-?\d+)/);
                         if(match) {
                             let mateIn = parseInt(match[1]);
-                            // If side to move (fen) is b, and mate is positive (Black mates), then for White it's negative
                             const side = fen.split(' ')[1];
                             if (side === 'b') mateIn = -mateIn;
                             evalScore = "M" + mateIn;
@@ -674,34 +634,38 @@
         async function getGeminiCommentary(apiKey) {
             let gameLog = "";
             analysisData.forEach((d, i) => {
-                // Send more data for context, even Good moves if they are tactical
                 if(d.classification === "Mistake" || d.classification === "Blunder" || d.classification === "Best" || i % 5 === 0) {
-                    gameLog += `Move ${i+1}: ${d.san} (Eval: ${d.eval}, Class: ${d.classification}, Better: ${d.bestMoveSan})\n`;
+                    // Send FEN context only for critical errors or every few moves
+                    const fenContext = (d.classification === "Mistake" || d.classification === "Blunder") ? `\n   FEN: ${d.fen}` : "";
+                    gameLog += `Move ${i+1}: ${d.san} (Eval: ${d.eval}, Class: ${d.classification}, Better: ${d.bestMoveSan})${fenContext}\n`;
                 }
             });
 
             if(!gameLog) gameLog = "Game was very balanced.";
 
             const prompt = `
-            You are a Grandmaster Chess Coach. I will provide a list of moves from a game with engine evaluations.
-            Your job is to explain the **Key Moments** (Mistakes, Blunders, Brilliant moves).
-
+            You are a Grandmaster Chess Coach. I will provide moves, engine evals, and FEN strings for critical moments.
+            
+            **YOUR GOAL:**
+            Provide high-level, instructive feedback. Don't just say a move is bad; explain the **CHESS PRINCIPLE** violated or the **TACTICAL MOTIF** missed.
+            
             **INSTRUCTIONS:**
-            1. **Be Strategic & Tactical:** Don't just say "eval dropped". Explain WHY.
-               - Example: "This allows a Knight fork on c7."
-               - Example: "This weakens the dark squares around the King."
-               - Example: "You missed a discovered attack on the Queen."
-            2. **Terminology:** Use terms like "Pin", "Fork", "Skewer", "Back-rank mate", "Space advantage", "Isolated pawn".
-            3. **Tone:** Encouraging but strict on blunders.
-            4. **Format:** Return a JSON object. Key = Move Number (1, 2, 3...). Value = The commentary string.
+            1. **Analyze the FEN:** For Blunders, use the FEN to see the board. Mention static features like "Back Rank weakness", "Open h-file", "Pin on the Knight", "Isolated Queen Pawn".
+            2. **Identify Openings:** If you recognize the opening moves, mention it (e.g., "You entered the Ruy Lopez").
+            3. **Be Specific:**
+               - Bad: "You lost advantage."
+               - Good: "This move allows Black to create a passed pawn on the d-file."
+               - Good: "You missed a fork on c7."
+            4. **Format:** JSON Object. Key = Move Number. Value = Commentary.
 
             **Game Data:**
             ${gameLog}
 
             **Output JSON Example:**
             {
-                "12": "Mistake. pushing f3 weakens your King's diagonal, allowing Qh4+.",
-                "25": "Brilliant! The sacrifice opens the h-file for a mating attack."
+                "1": "Standard e4 opening.",
+                "12": "Mistake. The FEN shows your King is exposed on the g-file. This move allows Qh4+ leading to mate.",
+                "25": "Brilliant! You spotted the weak back rank."
             }
             `;
 
@@ -725,7 +689,6 @@
                 
             } catch (e) {
                 console.error("Gemini Error:", e);
-                // Fallback
                 geminiComments = { 1: "Analysis complete. Click through moves to see Engine suggestions." };
             }
         }
@@ -746,9 +709,12 @@
 
             const prompt = `
             Context: Chess Game PGN: ${game.pgn()}
+            Current Board FEN: ${game.fen()}
             Current Move Index: ${currentMoveIndex} (Move ${Math.floor(currentMoveIndex/2)+1})
             User Question: ${text}
-            Answer as a Chess Coach. Focus on strategic concepts (weak squares, piece activity) and tactics.
+            
+            Answer as a Chess Coach. Use the FEN to describe specific piece locations (e.g. "Your Knight on f3").
+            Focus on strategic concepts (weak squares, piece activity) and tactics.
             `;
 
             try {
