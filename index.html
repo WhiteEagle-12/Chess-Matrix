@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Gemini Chess Analyst</title>
+    
+    <!-- Dependencies -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
+    <script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        body { background-color: #f3f4f6; touch-action: manipulation; }
+        #board { width: 100%; max-width: 450px; margin: 0 auto; }
+        
+        /* Chat UI Styles */
+        #chatContainer { display: none; height: 300px; display: flex; flex-direction: column; }
+        #chatHistory { flex-grow: 1; overflow-y: auto; scrollbar-width: thin; }
+        .user-msg { background-color: #dbeafe; align-self: flex-end; margin-left: 20px; }
+        .ai-msg { background-color: #f3f4f6; align-self: flex-start; margin-right: 20px; border: 1px solid #e5e7eb; }
+        .msg { padding: 8px 12px; border-radius: 12px; margin-bottom: 8px; font-size: 0.9rem; max-width: 85%; }
+        
+        .progress-bar { transition: width 0.2s ease; }
+    </style>
+</head>
+<body class="text-gray-800 pb-10">
+
+    <div class="max-w-2xl mx-auto p-4 flex flex-col gap-4">
+        
+        <div class="text-center mb-2">
+            <h1 class="text-2xl font-bold text-blue-700"><i class="fa-solid fa-chess-knight"></i> Gemini Game Review</h1>
+            <p class="text-xs text-gray-500">Full Game Analysis & Chat</p>
+        </div>
+
+        <!-- API Key Input -->
+        <div class="bg-white p-3 rounded-lg shadow-sm border border-gray-200">
+            <label class="block text-xs font-bold mb-1 text-gray-600">Gemini API Key</label>
+            <input type="password" id="apiKeyInput" placeholder="Paste your AI Studio Key here..." 
+                   class="w-full p-2 border rounded text-sm focus:outline-none focus:border-blue-500">
+        </div>
+
+        <!-- Chess Board -->
+        <div class="bg-white p-1 rounded shadow-md relative">
+            <div id="board"></div>
+            <!-- Analysis Overlay -->
+            <div id="analysisOverlay" class="absolute inset-0 bg-white bg-opacity-90 z-10 hidden flex-col items-center justify-center">
+                <div class="text-blue-600 font-bold mb-2">Analyzing Game...</div>
+                <div class="w-64 h-4 bg-gray-200 rounded-full overflow-hidden">
+                    <div id="progressBar" class="h-full bg-blue-500 progress-bar" style="width: 0%"></div>
+                </div>
+                <div id="progressText" class="text-xs text-gray-500 mt-1">Move 1/--</div>
+            </div>
+        </div>
+
+        <!-- Engine Status -->
+        <div class="flex justify-between items-center bg-gray-800 text-white p-2 rounded text-sm">
+            <div id="status">White to move</div>
+            <div id="evalBox" class="font-mono bg-gray-700 px-2 rounded text-yellow-400">Eval: ...</div>
+        </div>
+
+        <!-- Controls -->
+        <div class="grid grid-cols-4 gap-2">
+            <button onclick="resetGame()" class="bg-gray-200 p-3 rounded hover:bg-gray-300"><i class="fa-solid fa-rotate-left"></i></button>
+            <button onclick="flipBoard()" class="bg-gray-200 p-3 rounded hover:bg-gray-300"><i class="fa-solid fa-arrows-rotate"></i></button>
+            <button onclick="undoMove()" class="bg-gray-200 p-3 rounded hover:bg-gray-300"><i class="fa-solid fa-backward"></i></button>
+            <button onclick="showFenDialog()" class="bg-gray-200 p-3 rounded hover:bg-gray-300"><i class="fa-solid fa-upload"></i></button>
+        </div>
+
+        <!-- Actions -->
+        <button onclick="startFullAnalysis()" id="analyzeBtn" class="w-full bg-blue-600 text-white py-3 rounded-lg font-bold shadow-lg hover:bg-blue-700 active:transform active:scale-95 flex items-center justify-center gap-2">
+            <i class="fa-solid fa-magnifying-glass-chart"></i> Review Full Game
+        </button>
+
+        <!-- Chat Section (Hidden until analysis is done) -->
+        <div id="chatSection" class="hidden bg-white rounded-lg shadow-md border border-gray-200 overflow-hidden flex flex-col h-[500px]">
+            <div class="bg-gray-50 p-3 border-b flex justify-between items-center">
+                <span class="font-bold text-gray-700">♟️ Coach Gemini</span>
+                <select id="persona" class="text-xs border rounded p-1">
+                    <option value="coach">Helpful Coach</option>
+                    <option value="roast">Roaster</option>
+                    <option value="grandmaster">Grandmaster</option>
+                </select>
+            </div>
+            
+            <div id="chatHistory" class="p-4 flex flex-col gap-2 bg-white flex-1 overflow-y-auto">
+                <!-- Messages go here -->
+            </div>
+
+            <div class="p-3 bg-gray-50 border-t flex gap-2">
+                <input type="text" id="userPrompt" placeholder="Ask about the game..." class="flex-1 border rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500" onkeypress="handleEnter(event)">
+                <button onclick="sendUserMessage()" class="bg-blue-600 text-white px-4 rounded hover:bg-blue-700"><i class="fa-solid fa-paper-plane"></i></button>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- PGN Modal -->
+    <div id="fenModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
+        <div class="bg-white p-4 rounded-lg w-11/12 max-w-md">
+            <h3 class="font-bold mb-2">Load Game</h3>
+            <textarea id="pgnInput" class="w-full border p-2 h-32 text-xs font-mono mb-2" placeholder="Paste PGN here..."></textarea>
+            <div class="text-red-500 text-xs mb-2 hidden" id="loadError">Invalid format</div>
+            <div class="flex justify-end gap-2">
+                <button onclick="closeFenDialog()" class="px-3 py-1 bg-gray-200 rounded">Cancel</button>
+                <button onclick="loadPgnOrFen()" class="px-3 py-1 bg-blue-600 text-white rounded">Load</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- CONFIG & STATE ---
+        const STOCKFISH_URL = 'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js';
+        let board = null;
+        let game = new Chess();
+        let stockfish = null;
+        let currentEval = "0.00";
+        let engineReady = false;
+        
+        // Chat History for Gemini API (Multi-turn)
+        let chatSession = []; 
+
+        // --- INIT ---
+        const savedKey = localStorage.getItem("gemini_api_key");
+        if(savedKey) document.getElementById('apiKeyInput').value = savedKey;
+
+        document.getElementById('apiKeyInput').addEventListener('input', (e) => {
+            localStorage.setItem("gemini_api_key", e.target.value);
+        });
+
+        // --- ENGINE SETUP ---
+        const workerBlob = new Blob([`importScripts('${STOCKFISH_URL}');`], { type: 'application/javascript' });
+        const workerUrl = URL.createObjectURL(workerBlob);
+        
+        try {
+            stockfish = new Worker(workerUrl);
+            stockfish.postMessage('uci');
+            
+            // We use a custom listener in the analysis function, so we keep a generic one for live board updates
+            stockfish.addEventListener('message', function(e) {
+                const line = e.data;
+                if(line === 'readyok') engineReady = true;
+                
+                // Only update live UI if NOT in analysis mode
+                if (!window.isAnalyzing && line.includes('cp ')) {
+                   const match = line.match(/cp (-?\d+)/);
+                   if (match) updateEvalBox(parseInt(match[1]));
+                }
+            });
+        } catch (e) {
+            console.error(e);
+        }
+
+        function updateEvalBox(cp) {
+            const score = (game.turn() === 'w' ? cp : -cp) / 100;
+            currentEval = (score > 0 ? "+" : "") + score.toFixed(2);
+            document.getElementById('evalBox').innerText = currentEval;
+        }
+
+        // --- BOARD LOGIC ---
+        function onDragStart(source, piece) {
+            if (game.game_over()) return false;
+            if ((game.turn() === 'w' && piece.search(/^b/) !== -1) ||
+                (game.turn() === 'b' && piece.search(/^w/) !== -1)) return false;
+        }
+
+        function onDrop(source, target) {
+            const move = game.move({ from: source, to: target, promotion: 'q' });
+            if (move === null) return 'snapback';
+            updateStatus();
+            // Simple quick eval for live play
+            stockfish.postMessage('position fen ' + game.fen());
+            stockfish.postMessage('go depth 10');
+        }
+
+        function onSnapEnd() { board.position(game.fen()); }
+
+        board = Chessboard('board', {
+            draggable: true,
+            position: 'start',
+            onDragStart: onDragStart,
+            onDrop: onDrop,
+            onSnapEnd: onSnapEnd
+        });
+        window.addEventListener('resize', board.resize);
+
+        function updateStatus() {
+            let status = '';
+            const moveColor = (game.turn() === 'b') ? 'Black' : 'White';
+            if (game.in_checkmate()) status = 'Checkmate! ' + moveColor + ' loses.';
+            else if (game.in_draw()) status = 'Draw.';
+            else {
+                status = moveColor + ' to move';
+                if (game.in_check()) status += ' (Check)';
+            }
+            document.getElementById('status').innerText = status;
+        }
+
+        // --- BATCH ANALYSIS LOGIC ---
+        window.isAnalyzing = false;
+
+        async function startFullAnalysis() {
+            const apiKey = document.getElementById('apiKeyInput').value.trim();
+            if (!apiKey) { alert("Please enter API Key first."); return; }
+
+            // UI Updates
+            window.isAnalyzing = true;
+            document.getElementById('analysisOverlay').classList.remove('hidden');
+            document.getElementById('chatSection').classList.add('hidden');
+            document.getElementById('analyzeBtn').disabled = true;
+            
+            // Get all moves
+            const history = game.history({ verbose: true });
+            const tempGame = new Chess();
+            let analysisLog = "GAME ANALYSIS LOG:\n";
+            
+            // Loop through every move
+            for (let i = 0; i < history.length; i++) {
+                const move = history[i];
+                tempGame.move(move.san);
+                const fen = tempGame.fen();
+                
+                // Update Progress UI
+                const pct = Math.round(((i + 1) / history.length) * 100);
+                document.getElementById('progressBar').style.width = pct + "%";
+                document.getElementById('progressText').innerText = `Analyzing move ${i+1}/${history.length}...`;
+                
+                // Run Engine for this position
+                const result = await getEngineAnalysis(fen);
+                
+                // Format: "1. e4 {Eval: 0.35, Best: Nf3}"
+                const moveNum = Math.floor(i/2) + 1;
+                const turn = move.color === 'w' ? '.' : '...';
+                analysisLog += `${moveNum}${turn} ${move.san} {Eval: ${result.eval}, EngineRec: ${result.bestMove}}\n`;
+            }
+
+            // Analysis Done
+            window.isAnalyzing = false;
+            document.getElementById('analysisOverlay').classList.add('hidden');
+            document.getElementById('analyzeBtn').disabled = false;
+            document.getElementById('chatSection').classList.remove('hidden');
+            document.getElementById('chatSection').scrollIntoView({ behavior: 'smooth' });
+
+            // Initialize Chat with Gemini
+            initGeminiChat(analysisLog);
+        }
+
+        // Helper: Wraps Stockfish worker in a Promise for a single position
+        function getEngineAnalysis(fen) {
+            return new Promise((resolve) => {
+                stockfish.postMessage('stop');
+                stockfish.postMessage('position fen ' + fen);
+                // Depth 12 is a good balance of speed vs accuracy for batch (approx 100-300ms)
+                stockfish.postMessage('go depth 12'); 
+
+                let bestMove = "-";
+                let evaluation = "0.00";
+
+                // Temporary listener for this specific request
+                const listener = function(e) {
+                    const line = e.data;
+                    
+                    if (line.includes('cp ')) {
+                        const match = line.match(/cp (-?\d+)/);
+                        if(match) evaluation = (parseInt(match[1]) / 100).toFixed(2);
+                    } else if (line.includes('mate ')) {
+                        const match = line.match(/mate (-?\d+)/);
+                        if(match) evaluation = "M" + match[1];
+                    }
+
+                    if (line.startsWith('bestmove')) {
+                        bestMove = line.split(' ')[1];
+                        stockfish.removeEventListener('message', listener);
+                        resolve({ eval: evaluation, bestMove: bestMove });
+                    }
+                };
+                
+                stockfish.addEventListener('message', listener);
+            });
+        }
+
+        // --- GEMINI CHAT LOGIC ---
+        async function initGeminiChat(analysisData) {
+            const persona = document.getElementById('persona').value;
+            let systemPrompt = "You are a chess coach. Use the provided Engine Analysis Log to summarize the game. Identify the key turning points and mistakes. Be concise.";
+            
+            if (persona === 'roast') systemPrompt = "You are a ruthless chess roaster (like GothamChess). Roast the players based on the Engine Analysis Log.";
+            if (persona === 'grandmaster') systemPrompt = "You are a GM. Analyze the game deeply using the Engine Log.";
+
+            // Initial Context Message
+            const initialMessage = `
+            ${systemPrompt}
+            
+            [GAME PGN]
+            ${game.pgn()}
+            
+            [ENGINE ANALYSIS LOG]
+            ${analysisData}
+            
+            Please provide a short summary of the game and who played better.
+            `;
+
+            // Reset Chat Session
+            chatSession = [
+                { role: "user", parts: [{ text: initialMessage }] }
+            ];
+
+            // Clear UI
+            const historyDiv = document.getElementById('chatHistory');
+            historyDiv.innerHTML = '';
+            addMessageToUi("Analyzing game data...", "ai");
+
+            await callGeminiApi();
+        }
+
+        async function sendUserMessage() {
+            const input = document.getElementById('userPrompt');
+            const text = input.value.trim();
+            if (!text) return;
+
+            addMessageToUi(text, "user");
+            chatSession.push({ role: "user", parts: [{ text: text }] });
+            input.value = '';
+
+            addMessageToUi("Thinking...", "ai", true); // temporary loading msg
+            await callGeminiApi();
+        }
+
+        async function callGeminiApi() {
+            const apiKey = document.getElementById('apiKeyInput').value;
+            const historyDiv = document.getElementById('chatHistory');
+
+            try {
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: chatSession })
+                });
+
+                const data = await response.json();
+                
+                // Remove loading message if exists
+                const loader = document.getElementById('loading-msg');
+                if(loader) loader.remove();
+
+                if (data.error) {
+                    addMessageToUi("Error: " + data.error.message, "ai");
+                    return;
+                }
+
+                const aiText = data.candidates[0].content.parts[0].text;
+                
+                // Add AI response to session history
+                chatSession.push({ role: "model", parts: [{ text: aiText }] });
+                
+                // Update UI (replace initial loading msg if it was the first turn)
+                if (chatSession.length === 2) historyDiv.innerHTML = ''; 
+                
+                addMessageToUi(aiText, "ai");
+
+            } catch (e) {
+                addMessageToUi("Network Error: " + e.message, "ai");
+            }
+        }
+
+        function addMessageToUi(text, role, isLoading = false) {
+            const div = document.createElement('div');
+            div.className = `msg ${role === 'user' ? 'user-msg' : 'ai-msg'} flex flex-col`;
+            if (isLoading) div.id = 'loading-msg';
+            
+            // Simple markdown parser for bolding
+            const formattedText = text.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>');
+            div.innerHTML = formattedText;
+            
+            const historyDiv = document.getElementById('chatHistory');
+            historyDiv.appendChild(div);
+            historyDiv.scrollTop = historyDiv.scrollHeight;
+        }
+
+        function handleEnter(e) {
+            if (e.key === 'Enter') sendUserMessage();
+        }
+
+        // --- UTILS ---
+        function resetGame() {
+            game.reset();
+            board.start();
+            updateStatus();
+            document.getElementById('chatSection').classList.add('hidden');
+        }
+        function flipBoard() { board.flip(); }
+        function undoMove() { game.undo(); board.position(game.fen()); updateStatus(); }
+        function showFenDialog() { document.getElementById('fenModal').classList.remove('hidden'); }
+        function closeFenDialog() { document.getElementById('fenModal').classList.add('hidden'); }
+        
+        function loadPgnOrFen() {
+            let input = document.getElementById('pgnInput').value.trim();
+            if (!input) return;
+            game.reset();
+            let result = game.load_pgn(input) || game.load(input);
+            if (result) {
+                board.position(game.fen());
+                updateStatus();
+                closeFenDialog();
+            } else {
+                document.getElementById('loadError').classList.remove('hidden');
+            }
+        }
+    </script>
+</body>
+</html>
