@@ -95,7 +95,6 @@
         .bg-book { background-color: #a855f7; }
         .bg-neutral { background-color: #94a3b8; }
 
-        /* Plan Badge */
         .plan-badge {
             background-color: #e0e7ff;
             color: #4338ca;
@@ -193,7 +192,6 @@
                     <div class="flex justify-between items-start mb-2">
                         <div class="flex flex-col items-start gap-1">
                             <span id="moveClassBadge" class="classification-badge bg-neutral">Neutral</span>
-                            <!-- Strategic Plan Badge -->
                             <span id="strategicPlan" class="plan-badge hidden"><i class="fa-solid fa-bullseye"></i> <span id="planText">Development</span></span>
                         </div>
                         <div class="text-right">
@@ -311,6 +309,76 @@
         }
         function flipBoard() { if(board) board.flip(); updateThreatMap(); }
 
+        // --- GAME LOADING ---
+        function loadPGN() {
+            const btn = document.getElementById('loadPgnBtn');
+            const originalText = btn.innerText;
+            btn.innerText = "Loading...";
+            
+            // Force reset of all states
+            isAnalyzing = false;
+            stopPvReview();
+            giveUpRetry();
+            document.getElementById('analysisOverlay').classList.add('hidden');
+
+            setTimeout(() => {
+                const rawPgn = document.getElementById('pgnInput').value.trim();
+                if (!rawPgn) {
+                    btn.innerText = originalText;
+                    return;
+                }
+
+                try {
+                    // 1. Try Standard Load
+                    let success = game.load_pgn(rawPgn);
+                    
+                    // 2. Fallback: Aggressive Cleaning
+                    if (!success) {
+                        // Remove headers [Event ...]
+                        let clean = rawPgn.replace(/\[.*?\]/g, "");
+                        // Remove comments { ... }
+                        clean = clean.replace(/\{.*?\}/g, "");
+                        // Remove variations ( ... )
+                        clean = clean.replace(/\(.*?\)/g, "");
+                        // Remove NAGs $1
+                        clean = clean.replace(/\$\d+/g, "");
+                        // Remove move numbers 1. 
+                        // clean = clean.replace(/\d+\./g, ""); // Chess.js needs numbers sometimes? No, usually fine.
+                        // Actually chess.js handles numbers fine, but variations kill it.
+                        
+                        clean = clean.trim();
+                        
+                        if (!game.load_pgn(clean)) {
+                            throw new Error("Parse failed");
+                        }
+                    }
+
+                    gameHistory = game.history({ verbose: true });
+                    game.reset();
+                    currentMoveIndex = -1;
+                    board.position(game.fen());
+                    board.orientation('white'); 
+                    
+                    analysisData = [];
+                    geminiComments = {};
+                    
+                    updateUI();
+                    document.getElementById('pgnModal').classList.add('hidden');
+                    document.getElementById('gameStatus').innerText = "Game Loaded. Click Review.";
+                    document.getElementById('feedbackPlaceholder').innerHTML = '<i class="fa-solid fa-wand-magic-sparkles text-2xl mb-2 text-indigo-500"></i><br>Game Loaded.<br>Click <b>Review</b> for AI Analysis.';
+                    document.getElementById('pgnInput').value = ''; 
+                    
+                    setTimeout(() => board.resize(), 100);
+
+                } catch (e) {
+                    alert("Invalid PGN. Please ensure it is a valid game record.");
+                    console.error(e);
+                } finally {
+                    btn.innerText = originalText;
+                }
+            }, 50);
+        }
+
         // --- RETRY LOGIC ---
         function onDragStart(source, piece) {
             if (!retryState.active) return false;
@@ -348,8 +416,10 @@
         }
         function giveUpRetry() {
             retryState.active = false;
-            const data = analysisData[currentMoveIndex];
-            game.load(data.fen); board.position(data.fen);
+            if(analysisData[currentMoveIndex]) {
+                const data = analysisData[currentMoveIndex];
+                game.load(data.fen); board.position(data.fen);
+            }
             document.getElementById('board').classList.remove('board-retry-highlight');
             document.getElementById('retryModeBadge').classList.add('hidden');
             document.getElementById('normalFeedback').classList.remove('hidden');
@@ -391,29 +461,21 @@
 
         // --- PLAN & CLUSTERING ALGORITHMS ---
         function getPawnStructure(fen) {
-            // Count center pawns (d4, e4 vs d5, e5)
-            // Files 3 and 4 (d and e), Ranks 3,4,5,6
-            // Simple heuristic: If d/e pawns are blocked by other pawns = Closed.
-            // If d/e files empty = Open.
             const temp = new Chess(fen);
             const board = temp.board();
             let centerPawns = 0;
             let blockedCenter = 0;
-            
-            // Check d4, e4, d5, e5
-            const centers = [[3,3], [3,4], [4,3], [4,4]]; // Indices in 8x8 array
+            const centers = [[3,3], [3,4], [4,3], [4,4]]; 
             centers.forEach(([r,c]) => {
                 const p = board[r][c];
                 if(p && p.type === 'p') {
                     centerPawns++;
-                    // Check if blocked by opposing pawn in front
                     const frontR = p.color === 'w' ? r-1 : r+1;
                     if(board[frontR] && board[frontR][c] && board[frontR][c].type === 'p' && board[frontR][c].color !== p.color) {
                         blockedCenter++;
                     }
                 }
             });
-
             if (centerPawns === 0) return "Open Center";
             if (blockedCenter >= 2) return "Closed/Locked";
             if (centerPawns >= 2) return "Semi-Open";
@@ -421,21 +483,16 @@
         }
 
         function getSectorActivity(gameHistory, currentIndex) {
-            // Analyze last 6 moves (3 white, 3 black)
             if (currentIndex < 5) return "Opening/Development";
-            
             let kSide = 0, qSide = 0, center = 0;
             const start = Math.max(0, currentIndex - 5);
-            
             for(let i = start; i <= currentIndex; i++) {
                 const m = gameHistory[i];
-                // Check destination square file
-                const file = m.to.charCodeAt(0) - 97; // a=0, h=7
-                if (file <= 2) qSide++; // a,b,c
-                else if (file >= 5) kSide++; // f,g,h
-                else center++; // d,e
+                const file = m.to.charCodeAt(0) - 97; 
+                if (file <= 2) qSide++; 
+                else if (file >= 5) kSide++; 
+                else center++; 
             }
-            
             if (kSide > qSide && kSide > center) return "Kingside Play";
             if (qSide > kSide && qSide > center) return "Queenside Play";
             return "Center Battle";
@@ -484,8 +541,6 @@
                     const fenBefore = tempGame.fen();
                     const material = getMaterialImbalance(tempGame);
                     const tactics = getTacticsData(fenBefore, move);
-                    
-                    // NEW: Plan Identification Logic
                     const structure = getPawnStructure(fenBefore);
                     const sector = getSectorActivity(gameHistory, i);
                     
@@ -529,7 +584,7 @@
                         pv: preMoveResult.pv, pvSan: bestLineSan, san: move.san, color: move.color, classification: classification,
                         fen: fenAfter, fenBefore: fenBefore, material: material, tactics: tactics,
                         opening: openingInfo, tablebase: tablebaseInfo,
-                        structure: structure, sector: sector // Store context
+                        structure: structure, sector: sector 
                     });
                 }
                 
@@ -704,7 +759,6 @@
             document.getElementById('coachText').innerHTML = marked.parse(mainComment);
             document.getElementById('moveNumber').innerText = moveNotation;
             
-            // Update Plan Badge
             if(currentPlan) {
                 planBadge.classList.remove('hidden');
                 planText.innerText = currentPlan;
@@ -767,4 +821,13 @@
         function openSettings() { loadSettings(); document.getElementById('settingsModal').classList.remove('hidden'); }
     </script>
 </body>
-</html>
+</html>[Site "Chess.com"]
+[Result "1-0"]
+[WhiteElo "368"]
+[BlackElo "339"]
+[TimeControl "900+10"]
+[Termination "Abdulrahmmansalah won by checkmate"]
+1. e4 Nc6 2. d3 e5 3. Nf3 Nf6 4. Bg5 Be7 5. Nc3 O-O 6. Qd2 h6 7. Bxf6 Bxf6 8.
+O-O-O Bg5 9. Nxg5 hxg5 10. Qe3 f6 11. Nd5 d6 12. c3 Bg4 13. f3 Bh5 14. d4 exd4
+15. cxd4 Re8 16. Bc4 b6 17. Nxc7+ Re6 18. Nxe6 Qe8 19. Nc7+ Kf8 20. Nxe8 Kxe8
+21. d5 Ne5 22. Bb5+ Nd7 23. Bc6 Rc8 24. g4 Bg6 25. Qa3 a5 26. Qxd6 Kd8 27. Qxd7# 1-0
