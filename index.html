@@ -33,14 +33,17 @@
             flex: 1; 
             min-width: 0; 
             width: 100%; 
+            /* Strict Aspect Ratio Lock */
             aspect-ratio: 1 / 1;
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); 
             z-index: 10;
         }
 
+        /* Threat Map Overlay */
         #heatMapOverlay {
             position: absolute;
-            top: 0; left: 36px; right: 0; bottom: 0;
+            top: 0; left: 36px; /* Offset for eval bar */
+            right: 0; bottom: 0;
             display: grid;
             grid-template-columns: repeat(8, 1fr);
             grid-template-rows: repeat(8, 1fr);
@@ -66,6 +69,7 @@
         
         .piece-417db { background-size: 100%; }
 
+        /* Coach Box */
         .coach-box {
             background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
             border-left: 5px solid #cbd5e1;
@@ -74,13 +78,16 @@
             min-height: 170px;
         }
         .coach-box.pv-active { border-left-color: #6366f1; background: #eef2ff; }
+        .coach-box.retry-active { border-left-color: #ec4899; background: #fdf2f8; }
+
         .coach-box.best { border-left-color: #22c55e; background: #f0fdf4; }
         .coach-box.good { border-left-color: #84cc16; }
         .coach-box.inaccuracy { border-left-color: #facc15; background: #fefce8; } 
         .coach-box.mistake { border-left-color: #f97316; background: #fff7ed; } 
         .coach-box.miss { border-left-color: #f43f5e; background: #fff1f2; } 
         .coach-box.blunder { border-left-color: #dc2626; background: #fef2f2; } 
-        
+        .coach-box.book { border-left-color: #a855f7; }
+
         .classification-badge { font-size: 0.65rem; text-transform: uppercase; font-weight: 800; letter-spacing: 0.05em; padding: 2px 6px; border-radius: 4px; color: white; display: inline-block; margin-bottom: 2px; }
         .bg-best { background-color: #22c55e; }
         .bg-good { background-color: #84cc16; }
@@ -88,7 +95,21 @@
         .bg-mistake { background-color: #f97316; }
         .bg-miss { background-color: #f43f5e; }
         .bg-blunder { background-color: #dc2626; }
+        .bg-book { background-color: #a855f7; }
         .bg-neutral { background-color: #94a3b8; }
+
+        .plan-badge {
+            background-color: #e0e7ff;
+            color: #4338ca;
+            font-size: 0.65rem;
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 4px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            border: 1px solid #c7d2fe;
+        }
 
         .toggle-checkbox:checked { right: 0; border-color: #68D391; }
         .toggle-checkbox:checked + .toggle-label { background-color: #68D391; }
@@ -174,6 +195,7 @@
                     <div class="flex justify-between items-start mb-2">
                         <div class="flex flex-col items-start gap-1">
                             <span id="moveClassBadge" class="classification-badge bg-neutral">Neutral</span>
+                            <span id="strategicPlan" class="plan-badge hidden"><i class="fa-solid fa-bullseye"></i> <span id="planText">Development</span></span>
                         </div>
                         <div class="text-right">
                             <span id="moveNumber" class="text-xs text-gray-400 font-mono block">1. e4</span>
@@ -216,7 +238,6 @@
         </div>
     </div>
 
-    <!-- Settings Modal -->
     <div id="settingsModal" class="fixed inset-0 bg-black/50 z-50 hidden flex items-center justify-center">
         <div class="bg-white p-6 rounded-lg shadow-xl w-11/12 max-w-sm">
             <h2 class="text-lg font-bold mb-4">Settings</h2>
@@ -238,7 +259,6 @@
         </div>
     </div>
 
-    <!-- PGN Modal -->
     <div id="pgnModal" class="fixed inset-0 bg-black/50 z-50 hidden flex items-center justify-center">
         <div class="bg-white p-6 rounded-lg shadow-xl w-11/12 max-w-md">
             <h2 class="text-lg font-bold mb-2">Load Game</h2>
@@ -370,6 +390,45 @@
             return counts;
         }
 
+        // --- PLAN & CLUSTERING ALGORITHMS ---
+        function getPawnStructure(fen) {
+            const temp = new Chess(fen);
+            const board = temp.board();
+            let centerPawns = 0;
+            let blockedCenter = 0;
+            const centers = [[3,3], [3,4], [4,3], [4,4]]; 
+            centers.forEach(([r,c]) => {
+                const p = board[r][c];
+                if(p && p.type === 'p') {
+                    centerPawns++;
+                    const frontR = p.color === 'w' ? r-1 : r+1;
+                    if(board[frontR] && board[frontR][c] && board[frontR][c].type === 'p' && board[frontR][c].color !== p.color) {
+                        blockedCenter++;
+                    }
+                }
+            });
+            if (centerPawns === 0) return "Open Center";
+            if (blockedCenter >= 2) return "Closed/Locked";
+            if (centerPawns >= 2) return "Semi-Open";
+            return "Fluid";
+        }
+
+        function getSectorActivity(gameHistory, currentIndex) {
+            if (currentIndex < 5) return "Opening/Development";
+            let kSide = 0, qSide = 0, center = 0;
+            const start = Math.max(0, currentIndex - 5);
+            for(let i = start; i <= currentIndex; i++) {
+                const m = gameHistory[i];
+                const file = m.to.charCodeAt(0) - 97; 
+                if (file <= 2) qSide++; 
+                else if (file >= 5) kSide++; 
+                else center++; 
+            }
+            if (kSide > qSide && kSide > center) return "Kingside Play";
+            if (qSide > kSide && qSide > center) return "Queenside Play";
+            return "Center Battle";
+        }
+
         // --- EXTERNAL APIs ---
         async function fetchOpeningData(fen) {
             try {
@@ -414,6 +473,8 @@
                     const fenBefore = tempGame.fen();
                     const material = getMaterialImbalance(tempGame);
                     const tactics = getTacticsData(fenBefore, move);
+                    const structure = getPawnStructure(fenBefore);
+                    const sector = getSectorActivity(gameHistory, i);
                     
                     let openingInfo = null;
                     if (i < 12) openingInfo = await fetchOpeningData(fenBefore);
@@ -454,7 +515,8 @@
                         eval: currentEvalAfter.toFixed(2), bestMove: preMoveResult.bestMove, bestMoveSan: bestMoveSan,
                         pv: preMoveResult.pv, pvSan: bestLineSan, san: move.san, color: move.color, classification: classification,
                         fen: fenAfter, fenBefore: fenBefore, material: material, tactics: tactics,
-                        opening: openingInfo, tablebase: tablebaseInfo
+                        opening: openingInfo, tablebase: tablebaseInfo,
+                        structure: structure, sector: sector 
                     });
                 }
                 
@@ -519,7 +581,7 @@
                         let extra = "";
                         if(d.opening) extra += `\n   Opening: ${d.opening}`;
                         if(d.tablebase) extra += `\n   ${d.tablebase}`;
-                        const context = `\n   FEN: ${d.fenBefore}\n   Mat: ${d.material} | Tact: ${d.tactics}${extra}\n   Best Line (SAN): ${d.pvSan}`;
+                        const context = `\n   FEN: ${d.fenBefore}\n   Context: ${d.structure} | ${d.sector}\n   Mat: ${d.material} | Tact: ${d.tactics}${extra}\n   Best Line (SAN): ${d.pvSan}`;
                         gameLog += `Move ${i+1} (${d.color}): ${d.san} (Eval: ${d.eval}, Class: ${d.classification}, Better: ${d.bestMoveSan})${context}\n`;
                     }
                 } else gameLog += `Move ${i+1} (${d.color}): ${d.san}\n`;
@@ -532,11 +594,12 @@
 
             const prompt = `You are a Grandmaster Chess Coach. ${focusInstruction}
             **TASK:**
-            1. Analyze critical errors using FEN, Opening Name, and Tablebase data.
-            2. **IDENTIFY TACTICS:** Look for "Fork", "Pin", "Sacrifice".
-            3. **EXPLAIN THE BEST LINE:** Narrate the *pv_explanation*.
+            1. Analyze the game using the "Context" (Structure/Sector) data.
+            2. **IDENTIFY PLANS:** Look at the 'Sector' (Kingside/Queenside) and 'Structure' (Open/Closed).
+            3. **OUTPUT PLAN:** In the JSON, output a short 'plan_name' (e.g. "Kingside Attack") for every move.
+            4. **NARRATE THE LINE:** Explain *pv_explanation*.
             
-            **JSON OUTPUT:** { "12": { "analysis": "...", "pv_explanation": ["1. Move: reason"] } }
+            **JSON OUTPUT:** { "12": { "analysis": "...", "plan_name": "Center Control", "pv_explanation": ["..."] } }
             **Data:** ${gameLog}`;
 
             try {
@@ -544,72 +607,6 @@
                 const data = await response.json();
                 geminiComments = JSON.parse(data.candidates[0].content.parts[0].text);
             } catch (e) { console.error(e); geminiComments = { 1: { analysis: "Analysis complete." } }; }
-        }
-
-        // --- GAME LOADING ---
-        function loadPGN() {
-            const btn = document.getElementById('loadPgnBtn');
-            const originalText = btn.innerText;
-            btn.innerText = "Loading...";
-            
-            // Hard reset
-            isAnalyzing = false;
-            stopPvReview();
-            if(retryState.active) giveUpRetry();
-            document.getElementById('analysisOverlay').classList.add('hidden');
-
-            setTimeout(() => {
-                const rawPgn = document.getElementById('pgnInput').value.trim();
-                if (!rawPgn) { btn.innerText = originalText; return; }
-
-                try {
-                    // BRUTE FORCE PARSER: Ignores headers, comments, variations
-                    let clean = rawPgn.replace(/\[[^\]]*\]/g, ' '); // Remove headers
-                    clean = clean.replace(/\{[^\}]*\}/g, ' '); // Remove comments
-                    clean = clean.replace(/\([^\)]*\)/g, ' '); // Remove variations
-                    clean = clean.replace(/\$\d+/g, ' '); // Remove NAGs
-                    clean = clean.replace(/\d+\.+/g, ' '); // Remove move numbers
-                    clean = clean.replace(/\+/g, '').replace(/#/g, ''); // Remove check/mate symbols for safer parsing
-                    
-                    // Tokenize and clean
-                    const tokens = clean.split(/\s+/).filter(t => {
-                        return t.length > 1 && !/^\d/.test(t) && !['1-0','0-1','1/2-1/2','*'].includes(t);
-                    });
-                    
-                    // Play Moves
-                    game.reset();
-                    let success = true;
-                    for(const token of tokens) {
-                        const move = game.move(token);
-                        if(!move) { success = false; break; }
-                    }
-
-                    if (!success && game.history().length === 0) throw new Error("Parse failed");
-
-                    gameHistory = game.history({ verbose: true });
-                    game.reset();
-                    currentMoveIndex = -1;
-                    board.position(game.fen());
-                    board.orientation('white'); 
-                    
-                    analysisData = [];
-                    geminiComments = {};
-                    
-                    updateUI();
-                    document.getElementById('pgnModal').classList.add('hidden');
-                    document.getElementById('gameStatus').innerText = "Game Loaded. Click Review.";
-                    document.getElementById('feedbackPlaceholder').innerHTML = '<i class="fa-solid fa-wand-magic-sparkles text-2xl mb-2 text-indigo-500"></i><br>Game Loaded.<br>Click <b>Review</b> for AI Analysis.';
-                    document.getElementById('pgnInput').value = ''; 
-                    
-                    setTimeout(() => board.resize(), 100);
-
-                } catch (e) {
-                    alert("PGN Error: Could not parse moves. Please try standard PGN format.");
-                    console.error(e);
-                } finally {
-                    btn.innerText = originalText;
-                }
-            }, 100);
         }
 
         function initStockfish() { try { const blob = new Blob([`importScripts('${STOCKFISH_URL}');`], {type: 'application/javascript'}); stockfish = new Worker(URL.createObjectURL(blob)); stockfish.postMessage('uci'); } catch (e) { console.error(e); } }
@@ -626,6 +623,182 @@
                 const reply = data.candidates[0].content.parts[0].text;
                 document.getElementById('chatHistory').innerHTML += `<div class="text-left mb-2 text-gray-700"><b>Coach:</b> ${marked.parse(reply)}</div>`;
             } catch (e) {}
+        }
+
+        // --- NAVIGATION ---
+        function updateUI() {
+            if(pvState.active) return;
+            if(retryState.enabled && !retryState.active && analysisData[currentMoveIndex]) {
+                const data = analysisData[currentMoveIndex];
+                const focus = document.getElementById('analysisFocus').value;
+                const isMyMove = (focus === 'both') || (focus === data.color);
+                if (isMyMove && ["Mistake", "Blunder", "Miss"].includes(data.classification)) { enterRetryMode(data); return; }
+            }
+            board.position(game.fen());
+            const turn = game.turn();
+            document.getElementById('turnIndicator').className = `w-3 h-3 rounded-full border-2 border-black ${turn === 'w' ? 'bg-white' : 'bg-black'}`;
+            updateCoachBox(); updateEvalBar(); updateThreatMap();
+        }
+        function nextMove() { if(!pvState.active && !retryState.active && currentMoveIndex < gameHistory.length -1) { currentMoveIndex++; game.move(gameHistory[currentMoveIndex]); updateUI(); }}
+        function prevMove() { if(!pvState.active && !retryState.active && currentMoveIndex >= 0) { game.undo(); currentMoveIndex--; updateUI(); }}
+        function goToStart() { if(!pvState.active && !retryState.active) { game.reset(); currentMoveIndex = -1; updateUI(); }}
+        function goToEnd() { if(!pvState.active && !retryState.active) { while(currentMoveIndex < gameHistory.length -1) { currentMoveIndex++; game.move(gameHistory[currentMoveIndex]); } updateUI(); }}
+
+        function updateCoachBox() {
+            if(pvState.active) return;
+            const contentDiv = document.getElementById('feedbackContent');
+            const placeholder = document.getElementById('feedbackPlaceholder');
+            const box = document.getElementById('coachBox');
+            const badge = document.getElementById('moveClassBadge');
+            const planBadge = document.getElementById('strategicPlan');
+            const planText = document.getElementById('planText');
+            const suggestionDiv = document.getElementById('bestMoveSuggestion');
+            const bestMoveText = document.getElementById('bestMoveText');
+            const openingName = document.getElementById('openingName');
+
+            if (analysisData.length === 0) { contentDiv.classList.add('hidden'); placeholder.classList.remove('hidden'); box.className = 'coach-box p-4 rounded-r-lg shadow-sm flex flex-col justify-center'; return; }
+            if (currentMoveIndex === -1) { contentDiv.classList.add('hidden'); placeholder.classList.remove('hidden'); placeholder.innerHTML = "Start of Game"; return; }
+            contentDiv.classList.remove('hidden'); placeholder.classList.add('hidden');
+
+            const data = analysisData[currentMoveIndex];
+            const moveInfo = gameHistory[currentMoveIndex];
+            const moveNum = Math.floor(currentMoveIndex / 2) + 1;
+            const moveNotation = `${moveNum}${moveInfo.color === 'w' ? '.' : '...'} ${moveInfo.san}`;
+
+            badge.innerText = data.classification;
+            badge.className = `classification-badge bg-${data.classification.toLowerCase()}`;
+            box.className = `coach-box ${data.classification.toLowerCase()} p-4 rounded-r-lg shadow-sm flex flex-col justify-center`;
+            
+            openingName.innerText = data.opening || "";
+
+            let comment = geminiComments[currentMoveIndex + 1]; 
+            let mainComment = "Standard move.";
+            let currentPlan = "";
+
+            if (comment) { 
+                if (typeof comment === 'string') mainComment = comment; 
+                else {
+                    mainComment = comment.analysis || mainComment;
+                    currentPlan = comment.plan_name || "";
+                }
+            } else { 
+                if (data.classification === "Best") mainComment = "Excellent find!";
+                else if (data.classification === "Good") mainComment = "Solid move.";
+                else if (data.classification === "Mistake") mainComment = "This loses advantage.";
+                else if (data.classification === "Blunder") mainComment = "Critical error.";
+            }
+            
+            document.getElementById('coachText').innerHTML = marked.parse(mainComment);
+            document.getElementById('moveNumber').innerText = moveNotation;
+            
+            if(currentPlan) {
+                planBadge.classList.remove('hidden');
+                planText.innerText = currentPlan;
+            } else {
+                planBadge.classList.add('hidden');
+            }
+
+            const needsSuggestion = ["Inaccuracy", "Mistake", "Miss", "Blunder"].includes(data.classification);
+            if (needsSuggestion && data.bestMoveSan && data.pv) {
+                suggestionDiv.classList.remove('hidden');
+                bestMoveText.innerText = data.bestMoveSan;
+            } else { suggestionDiv.classList.add('hidden'); }
+        }
+
+        // --- PV LOGIC ---
+        function startPvReview() {
+            if (currentMoveIndex < 0 || !analysisData[currentMoveIndex]) return;
+            const data = analysisData[currentMoveIndex];
+            if (!data.pv) { alert("No line available."); return; }
+            pvState.active = true; pvState.startFen = data.fenBefore; pvState.tempGame = new Chess(data.fenBefore);
+            pvState.currentIndex = -1; pvState.moves = [];
+            const moveStrings = data.pv.split(' ');
+            const limit = Math.min(moveStrings.length, 6);
+            for(let i=0; i<limit; i++) {
+                const m = moveStrings[i]; const from = m.substring(0,2); const to = m.substring(2,4); const promotion = m.length > 4 ? m.substring(4,5) : 'q';
+                const moveObj = pvState.tempGame.move({from, to, promotion}); if(moveObj) pvState.moves.push(moveObj); else break; 
+            }
+            pvState.tempGame.reset(); pvState.tempGame.load(data.fenBefore);
+            pvState.comments = [];
+            const geminiData = geminiComments[currentMoveIndex + 1];
+            if (geminiData && geminiData.pv_explanation) pvState.comments = geminiData.pv_explanation;
+            else pvState.comments = pvState.moves.map((m, i) => i === 0 ? "The engine preferred this start." : "Follow up.");
+            const box = document.getElementById('coachBox'); box.classList.add('pv-active');
+            document.getElementById('board').classList.add('board-pv-highlight');
+            document.getElementById('pvModeBadge').classList.remove('hidden');
+            document.getElementById('mainNavButtons').style.opacity = '0.5'; document.getElementById('mainNavButtons').style.pointerEvents = 'none';
+            document.getElementById('normalFeedback').classList.add('hidden'); document.getElementById('pvControls').classList.remove('hidden'); document.getElementById('pvControls').classList.add('flex');
+            board.position(pvState.startFen); updatePvUI();
+        }
+        function stopPvReview() {
+            pvState.active = false;
+            const box = document.getElementById('coachBox'); box.classList.remove('pv-active');
+            document.getElementById('board').classList.remove('board-pv-highlight');
+            document.getElementById('pvModeBadge').classList.add('hidden');
+            document.getElementById('normalFeedback').classList.remove('hidden');
+            document.getElementById('pvControls').classList.add('hidden'); document.getElementById('pvControls').classList.remove('flex');
+            document.getElementById('mainNavButtons').style.opacity = '1'; document.getElementById('mainNavButtons').style.pointerEvents = 'auto';
+            updateUI();
+        }
+        function nextPvMove() { if(!pvState.active) return; if(pvState.currentIndex < pvState.moves.length -1) { pvState.currentIndex++; const move = pvState.moves[pvState.currentIndex]; pvState.tempGame.move(move); board.position(pvState.tempGame.fen()); updatePvUI(); }}
+        function prevPvMove() { if(!pvState.active) return; if(pvState.currentIndex >= 0) { pvState.tempGame.undo(); pvState.currentIndex--; board.position(pvState.tempGame.fen()); updatePvUI(); }}
+        function updatePvUI() {
+            const indicator = document.getElementById('pvMoveIndicator'); const commentText = document.getElementById('pvCommentText');
+            if (pvState.currentIndex === -1) { indicator.innerText = "Start"; commentText.innerHTML = "<b>Initial Position.</b><br>Click > to see why this is better."; }
+            else { const moveObj = pvState.moves[pvState.currentIndex]; indicator.innerText = `Move ${pvState.currentIndex + 1}`; let comment = pvState.comments[pvState.currentIndex] || "Continuing."; commentText.innerHTML = `<b>${moveObj.san}:</b> ${comment}`; }
+        }
+
+        // --- GAME LOADING ---
+        function loadPGN() {
+            const btn = document.getElementById('loadPgnBtn');
+            const originalText = btn.innerText;
+            btn.innerText = "Loading...";
+            
+            isAnalyzing = false; stopPvReview(); if(retryState.active) giveUpRetry();
+            document.getElementById('analysisOverlay').classList.add('hidden');
+
+            setTimeout(() => {
+                const rawPgn = document.getElementById('pgnInput').value.trim();
+                if (!rawPgn) { btn.innerText = originalText; return; }
+
+                try {
+                    let success = game.load_pgn(rawPgn);
+                    if (!success) {
+                        // CLEANING: Strip [] headers, {} comments, () variations, $ nags, move numbers
+                        let clean = rawPgn.replace(/\[[^\]]*\]/g, ' ').replace(/\{[^\}]*\}/g, ' ')
+                                          .replace(/\([^\)]*\)/g, ' ').replace(/\$\d+/g, ' ')
+                                          .replace(/\d+\.+/g, ' ').replace(/\+/g, '').replace(/#/g, '');
+                        
+                        const tokens = clean.split(/\s+/).filter(t => t.length > 1 && !/^\d/.test(t) && !['1-0','0-1','1/2-1/2','*'].includes(t));
+                        
+                        game.reset();
+                        success = true;
+                        for(const token of tokens) {
+                            if(!game.move(token)) { success = false; break; }
+                        }
+                    }
+
+                    if (!success && game.history().length === 0) throw new Error("Parse failed");
+
+                    gameHistory = game.history({ verbose: true });
+                    game.reset(); currentMoveIndex = -1;
+                    board.position(game.fen()); board.orientation('white'); 
+                    
+                    analysisData = []; geminiComments = {};
+                    updateUI();
+                    document.getElementById('pgnModal').classList.add('hidden');
+                    document.getElementById('gameStatus').innerText = "Game Loaded. Click Review.";
+                    document.getElementById('feedbackPlaceholder').innerHTML = '<i class="fa-solid fa-wand-magic-sparkles text-2xl mb-2 text-indigo-500"></i><br>Game Loaded.<br>Click <b>Review</b> for AI Analysis.';
+                    document.getElementById('pgnInput').value = ''; 
+                    setTimeout(() => board.resize(), 100);
+
+                } catch (e) {
+                    alert("PGN Error. Please try standard format.");
+                    console.error(e);
+                } finally {
+                    btn.innerText = originalText;
+                }
+            }, 100);
         }
 
         function saveSettings() { const key = document.getElementById('apiKeyInput').value.trim(); if(key) localStorage.setItem('gemini_api_key', key); document.getElementById('settingsModal').classList.add('hidden'); updateThreatMap(); }
