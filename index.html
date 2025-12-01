@@ -231,6 +231,7 @@
                             <i class="fa-solid fa-play"></i> Show Best Line
                          </button>
                     </div>
+                    <div id="bestLineText" class="text-[10px] text-gray-400 font-mono mt-1 truncate"></div>
                 </div>
             </div>
         </div>
@@ -396,7 +397,7 @@
 
         // --- 4. NAVIGATION ---
         function updateUI() {
-            if(isPlayingLine) return; // Don't update during animation
+            if(isPlayingLine) return; 
             board.position(game.fen());
             
             const turn = game.turn();
@@ -480,6 +481,7 @@
             const suggestionDiv = document.getElementById('bestMoveSuggestion');
             const bestMoveText = document.getElementById('bestMoveText');
             const showLineBtn = document.getElementById('showLineBtn');
+            const bestLineText = document.getElementById('bestLineText');
 
             if (analysisData.length === 0) {
                 contentDiv.classList.add('hidden');
@@ -520,18 +522,19 @@
             document.getElementById('coachText').innerHTML = marked.parse(comment);
             document.getElementById('moveNumber').innerText = moveNotation;
 
-            // Show Best Move / Line feature for anything not "Best" or "Book"
             const needsSuggestion = ["Inaccuracy", "Mistake", "Miss", "Blunder"].includes(data.classification);
             
             if (needsSuggestion && data.bestMoveSan) {
                 suggestionDiv.classList.remove('hidden');
                 bestMoveText.innerText = data.bestMoveSan;
-                // Only show "Show Line" button if we actually captured a line
-                if (data.pv && data.pv.length > 0) {
+                
+                if (data.pvSan && data.pvSan.length > 0) {
                     showLineBtn.classList.remove('hidden');
                     showLineBtn.onclick = () => playBestLine(data.pv, data.fenBefore);
+                    bestLineText.innerText = "Line: " + data.pvSan;
                 } else {
                     showLineBtn.classList.add('hidden');
+                    bestLineText.innerText = "";
                 }
             } else {
                 suggestionDiv.classList.add('hidden');
@@ -543,6 +546,38 @@
             isAnalyzing = false;
             document.getElementById('analysisOverlay').classList.add('hidden');
             document.getElementById('analyzeBtn').disabled = false;
+        }
+        
+        // Helper: Convert UCI string (e2e4 g8f6) to SAN string (1. e4 Nf6 2...)
+        function uciToSan(fen, pvString) {
+            if (!pvString) return "";
+            const temp = new Chess(fen);
+            const moves = pvString.split(' ');
+            let sanStr = "";
+            let moveCount = temp.moveNumber();
+            
+            for (let i = 0; i < moves.length; i++) {
+                const m = moves[i];
+                const from = m.substring(0, 2);
+                const to = m.substring(2, 4);
+                const promotion = m.length > 4 ? m.substring(4, 5) : undefined;
+                
+                // Add move number if white or start
+                if (temp.turn() === 'w') {
+                    sanStr += `${moveCount}. `;
+                } else if (i === 0) {
+                     sanStr += `${moveCount}... `;
+                }
+
+                const moveObj = temp.move({ from, to, promotion });
+                if (moveObj) {
+                    sanStr += moveObj.san + " ";
+                    if (temp.turn() === 'w') moveCount++;
+                } else {
+                    break;
+                }
+            }
+            return sanStr.trim();
         }
 
         async function startAnalysis() {
@@ -578,20 +613,28 @@
                     document.getElementById('progressBar').style.width = pct + "%";
                     document.getElementById('progressText').innerText = `Stockfish: Move ${i+1}/${gameHistory.length}`;
 
-                    // A. PRE-MOVE ANALYSIS (The "Best" Path)
+                    // A. PRE-MOVE ANALYSIS
                     const fenBefore = tempGame.fen();
                     const preMoveResult = await runStockfish(fenBefore);
                     
                     let bestMoveSan = preMoveResult.bestMove;
+                    // Smart conversion of PV to SAN
+                    let bestLineSan = "";
+                    
                     if(preMoveResult.bestMove && preMoveResult.bestMove !== '-') {
-                        // Quick SAN conversion
+                        // Get immediate best move SAN
                         const from = preMoveResult.bestMove.substring(0,2);
                         const to = preMoveResult.bestMove.substring(2,4);
                         const promotion = preMoveResult.bestMove.length > 4 ? preMoveResult.bestMove.substring(4,5) : undefined;
-                        const moveObj = tempGame.move({ from, to, promotion });
-                        if(moveObj) {
-                            bestMoveSan = moveObj.san;
-                            tempGame.undo(); 
+                        
+                        // We use a clone to check move validity without messing up tempGame yet
+                        const checkGame = new Chess(fenBefore);
+                        const moveObj = checkGame.move({ from, to, promotion });
+                        if(moveObj) bestMoveSan = moveObj.san;
+                        
+                        // Convert Full PV to SAN for display/AI
+                        if (preMoveResult.pv) {
+                            bestLineSan = uciToSan(fenBefore, preMoveResult.pv);
                         }
                     }
 
@@ -604,29 +647,21 @@
                     const postMoveResult = await runStockfish(tempGame.fen());
                     let currentEvalAfter = parseEval(postMoveResult.eval, tempGame.turn());
                     
-                    // Delta Calculation (White Perspective)
-                    // If White moved: We want EvalAfter >= EvalBefore. Delta = EvalAfter - EvalBefore.
-                    // If Black moved: We want EvalAfter <= EvalBefore. Delta = EvalBefore - EvalAfter.
                     let delta = 0;
                     if (move.color === 'w') {
                         delta = currentEvalAfter - currentEvalBefore;
                     } else {
-                        delta = currentEvalBefore - currentEvalAfter; // Positive means Black improved/maintained
+                        delta = currentEvalBefore - currentEvalAfter; 
                     }
 
-                    // Strict Classification Logic
                     let classification = "Neutral";
-                    
-                    // Miss logic: If eval was winning (>1.5) and dropped significantly
-                    // Or if best move delta was much higher than played move delta?
-                    // Simplified Delta Thresholds:
                     if (i < 8 && Math.abs(delta) > -0.3) classification = "Book"; 
-                    else if (delta > 0.3) classification = "Best"; // Improved position
+                    else if (delta > 0.3) classification = "Best"; 
                     else if (delta > -0.2) classification = "Good";
-                    else if (delta > -0.6) classification = "Inaccuracy"; // -0.2 to -0.6
-                    else if (delta > -1.5) classification = "Mistake"; // -0.6 to -1.5
-                    else if (delta > -3.0) classification = "Miss"; // -1.5 to -3.0 (Often a missed win)
-                    else classification = "Blunder"; // < -3.0
+                    else if (delta > -0.6) classification = "Inaccuracy"; 
+                    else if (delta > -1.5) classification = "Mistake"; 
+                    else if (delta > -3.0) classification = "Miss"; 
+                    else classification = "Blunder"; 
 
                     if (move.san === bestMoveSan) classification = "Best";
                     
@@ -634,7 +669,8 @@
                         eval: currentEvalAfter.toFixed(2), 
                         bestMove: preMoveResult.bestMove,
                         bestMoveSan: bestMoveSan,
-                        pv: preMoveResult.pv, // Store the Principal Variation
+                        pv: preMoveResult.pv, 
+                        pvSan: bestLineSan, // Store the readable line
                         san: move.san,
                         color: move.color,
                         classification: classification,
@@ -672,23 +708,19 @@
         async function playBestLine(pv, startFen) {
             if(!pv || isPlayingLine) return;
             
-            // Lock UI
             isPlayingLine = true;
             document.getElementById('board').classList.add('playing-line');
             document.getElementById('bestLineOverlay').classList.remove('hidden');
             
-            // Setup Ghost Game
             const ghostGame = new Chess(startFen);
             const moves = pv.split(' ');
             
-            // Animate
             board.position(startFen);
             await new Promise(r => setTimeout(r, 500));
 
             for (let moveStr of moves) {
-                if (!isPlayingLine) break; // Allow exit
+                if (!isPlayingLine) break; 
                 
-                // Parse UCI (e2e4) to SAN for chess.js or just loose move
                 const from = moveStr.substring(0,2);
                 const to = moveStr.substring(2,4);
                 const promotion = moveStr.length > 4 ? moveStr.substring(4,5) : 'q';
@@ -700,12 +732,9 @@
                 await new Promise(r => setTimeout(r, 800));
             }
             
-            // Reset
             document.getElementById('board').classList.remove('playing-line');
             document.getElementById('bestLineOverlay').classList.add('hidden');
             isPlayingLine = false;
-            
-            // Return to actual game state
             board.position(game.fen());
         }
 
@@ -723,7 +752,7 @@
 
                 const timeoutId = setTimeout(() => {
                     resolve({ eval: "0.00", bestMove: "-", pv: "" }); 
-                }, 3000); // Increased timeout for PV calculation
+                }, 3000); 
 
                 stockfish.postMessage('stop');
                 stockfish.postMessage('position fen ' + fen);
@@ -736,7 +765,6 @@
                 const listener = (e) => {
                     const line = e.data;
                     
-                    // Capture PV (Principal Variation)
                     if (line.includes(' pv ')) {
                         const parts = line.split(' pv ');
                         if(parts[1]) pvLine = parts[1];
@@ -779,7 +807,8 @@
                 
                 if(isRelevant) {
                     if(["Mistake", "Blunder", "Miss", "Inaccuracy", "Best"].includes(d.classification) || i % 5 === 0) {
-                        const context = `\n   FEN: ${d.fen}\n   Best Line: ${d.pv}`;
+                        // Use SAN PV instead of raw PV
+                        const context = `\n   FEN: ${d.fen}\n   Best Line (Recommended): ${d.pvSan}`;
                         gameLog += `Move ${i+1} (${d.color}): ${d.san} (Eval: ${d.eval}, Class: ${d.classification}, Better: ${d.bestMoveSan})${context}\n`;
                     }
                 } else {
@@ -790,8 +819,8 @@
             if(!gameLog) gameLog = "Game was very balanced.";
             
             let focusInstruction = "Analyze both sides equally.";
-            if(focus === 'w') focusInstruction = "Player is WHITE. Focus entirely on White's decisions. Ignore Black's errors unless White missed a punisher.";
-            if(focus === 'b') focusInstruction = "Player is BLACK. Focus entirely on Black's decisions. Ignore White's errors unless Black missed a punisher.";
+            if(focus === 'w') focusInstruction = "Player is WHITE. Focus entirely on White's decisions.";
+            if(focus === 'b') focusInstruction = "Player is BLACK. Focus entirely on Black's decisions.";
 
             const prompt = `
             You are a Grandmaster Chess Coach. 
@@ -799,22 +828,22 @@
 
             **INSTRUCTIONS:**
             1. **CLASSIFICATION FEEDBACK:**
-               - **"Inaccuracy":** Be gentle. "Slightly passive," "Could be more precise."
-               - **"Mistake":** Explain the strategic error. "Weakens the pawn structure," "Allows piece activity."
-               - **"Miss":** HIGHLIGHT what was missed. "You missed a forced win!" "You missed a tactic to win a piece."
-               - **"Blunder":** Be strict. Explain the immediate tactical failure.
+               - **"Inaccuracy" / "Mistake":** Explain the strategic error.
+               - **"Miss":** HIGHLIGHT what was missed.
+               - **"Blunder":** Be strict.
             
-            2. **USE THE BEST LINE (PV):**
-               - The data includes "Best Line" (PV) from the engine. 
-               - **EXPLAIN THIS LINE.** Tell the user *what* the board would look like if they played correctly.
-               - Example: "The engine wanted Ne5, looking to fork the Queen and Rook on the next turn."
+            2. **NARRATE THE BEST LINE (PV):**
+               - I have converted the computer line to readable notation (e.g. 1. e4 e5).
+               - **DO NOT just list the moves.** - **NARRATE the logic.**
+               - BAD: "The best line is Nf3 d5 g3."
+               - GOOD: "The engine suggests developing the Knight to f3 to control the center, then fianchettoing the Bishop."
 
             **Game Data:**
             ${gameLog}
 
             **Output JSON Format:**
             {
-                "12": "Mistake. You allowed the Knight to outpost. The engine preferred playing c4 to challenge the center immediately."
+                "12": "Mistake. You allowed the Knight to outpost. Better was playing c4 to challenge the center immediately."
             }
             `;
 
