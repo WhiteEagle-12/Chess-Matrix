@@ -257,7 +257,10 @@
                 draggable: false, // Enabled only in Retry Mode
                 onDragStart: onDragStart,
                 onDrop: onDrop,
-                pieceTheme: 'https://images.chesscomfiles.com/chess-themes/pieces/neo/150/{piece}.png'
+                // FIXED: Use a function to ensure lowercase piece codes (e.g. 'wP' -> 'wp')
+                pieceTheme: function(piece) {
+                    return 'https://images.chesscomfiles.com/chess-themes/pieces/neo/150/' + piece.toLowerCase() + '.png';
+                }
             });
             $(window).resize(board.resize);
         }
@@ -347,7 +350,6 @@
                 
                 // Add center weight
                 if(['d4','e4','d5','e5'].includes(sq)) {
-                    // This is rough without a full attack table, but visually effective for "Space"
                     if (piece) score *= 1.5;
                 }
                 control[sq] = score;
@@ -744,8 +746,23 @@
 
         // --- PGN LOAD ---
         function loadPGN() {
-            const pgn = $("#pgnInput").val();
-            if(game.load_pgn(pgn)) {
+            const pgn = $("#pgnInput").val().trim();
+            if(!pgn) return;
+
+            // FIXED: Robust PGN Loading Logic
+            game.reset(); // Must reset first!
+            
+            // 1. Try Loading Normally
+            let success = game.load_pgn(pgn);
+            
+            // 2. If Failed, Try Cleaning (Remove headers, keep moves)
+            if (!success) {
+                console.log("Strict load failed, trying loose load...");
+                const movesOnly = pgn.replace(/\[.*?\]/g, "").replace(/\{.*?\}/g, "").trim();
+                success = game.load_pgn(movesOnly);
+            }
+
+            if(success) {
                 gameHistory = game.history({verbose: true});
                 game.reset();
                 currentMoveIndex = -1;
@@ -756,8 +773,9 @@
                 $("#pgnModal").addClass("hidden");
                 $("#gameStatus").text("Game Loaded.");
                 $("#feedbackPlaceholder").html("Ready to Review.");
+                $("#pgnInput").val('');
             } else {
-                alert("Invalid PGN");
+                alert("Invalid PGN. Please check the format.");
             }
         }
 
