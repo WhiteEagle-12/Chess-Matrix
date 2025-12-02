@@ -1045,46 +1045,104 @@
             return s;
         }
 
-        // --- 10. GEMINI API ---
-        async function getGeminiCommentary(key, focus, opening) {
-            let log = `Opening: ${opening}\n\n`;
-            analysisData.forEach((d,i) => {
-                if((focus==='both'||focus===d.color) && (["Mistake","Blunder","Miss","Inaccuracy"].includes(d.classification) || d.tactic)) {
-                    log += `Move ${i+1} (${d.color}): ${d.san} [${d.classification}] ${d.tactic?`[TACTIC: ${d.tactic}]`:''} -> Best: ${d.bestMoveSan} (Line: ${d.pvSan})\nFEN: ${d.fenBefore}\n`;
-                }
-            });
-            if(log.length<50) log="Game was solid.";
+        // --- 10. GEMINI API (ENHANCED STRATEGY VERSION) ---
+async function getGeminiCommentary(key, focus, opening) {
+    let log = `Game Context:\nOpening: ${opening}\n\n`;
+    
+    // We will select: All Mistakes/Blunders, Tactics, plus some "Best" moves for positive reinforcement
+    // and context markers every few moves to keep the AI aware of the flow.
+    analysisData.forEach((d, i) => {
+        const isUserTurn = (focus === 'both' || focus === d.color);
+        if (!isUserTurn) return;
 
-            const prompt = `
-            You are a Chess Coach. 
-            Opening: ${opening}
+        // Determine if we should send this move to Gemini
+        const isError = ["Mistake", "Blunder", "Miss", "Inaccuracy"].includes(d.classification);
+        const isGood = ["Best", "Great", "Brilliant"].includes(d.classification);
+        const isTactic = !!d.tactic;
+        const isKeyMoment = i < 10 || i % 5 === 0; // Opening moves or periodic updates
+
+        if (isError || isTactic || (isGood && isKeyMoment)) {
+            // Calculate previous eval to show the swing
+            // (We infer previous eval roughly from the current move's impact if not stored explicitly, 
+            // but here we just provide the current state which is usually sufficient context)
             
-            TASK:
-            Analyze mistakes. If [TACTIC] tag exists, explain the tactic (Fork, Pin, etc).
-            For Mistakes/Blunders, explain *why* the Best Line wins.
-
-            JSON OUTPUT:
-            {
-                "12": {
-                    "analysis": "You missed a fork here.",
-                    "pv_explanation": ["Checks king", "Wins queen"]
-                }
-            }
+            const moveInfo = `Move ${i + 1} (${d.color}): ${d.san}`;
+            const stats = `[Eval: ${d.eval}] [Class: ${d.classification}]`;
+            const tacticInfo = d.tactic ? `[TACTICAL THEME: ${d.tactic}]` : '';
+            const bestLineInfo = isError ? `\n   -> Engine Best Move: ${d.bestMoveSan}\n   -> Engine Line: ${d.pvSan}` : '';
             
-            DATA:
-            ${log}
-            `;
+            // Add Board Control Context for strategy
+            // We sum the control array to get a general "Space Advantage" score
+            const whiteControl = d.control ? d.control.filter(x => x > 0).length : 0;
+            const blackControl = d.control ? d.control.filter(x => x < 0).length : 0;
+            const spaceInfo = `[Space: W=${whiteControl}, B=${blackControl}]`;
 
-            try {
-                const res = await fetch(MODEL_ENDPOINT+`?key=${key}`, {
-                    method:'POST',
-                    headers:{'Content-Type':'application/json'},
-                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-                });
-                const d = await res.json();
-                geminiComments = JSON.parse(d.candidates[0].content.parts[0].text.replace(/```json/g,'').replace(/```/g,''));
-            } catch(e) { console.error(e); geminiComments={}; }
+            log += `${moveInfo} ${stats} ${tacticInfo} ${spaceInfo}${bestLineInfo}\nFEN: ${d.fenBefore}\n\n`;
         }
+    });
+
+    if (log.length < 50) log = "The game was short or very balanced. Summarize general principles.";
+
+    const prompt = `
+    You are a world-class Grandmaster Chess Coach (like a mix of Dvoretsky and Seirawan). 
+    Your goal is to explain the *WHY* behind the moves, focusing on strategy, positional concepts, and long-term plans.
+
+    **Current Game Info:**
+    Opening: ${opening}
+    User Color Focus: ${focus === 'both' ? 'Both White and Black' : (focus === 'w' ? 'White' : 'Black')}
+
+    **Instructions:**
+    1. **Strategic Depth:** Don't just say "You lost a pawn." Explain *consequences* like "This weakens your kingside pawn structure" or "You gave up control of the d5 outpost."
+    2. **Praise Good Play:** If the user played a "Best" move in a complex position, compliment their understanding of the position.
+    3. **Fixing Mistakes:** For errors, use the provided Engine Line to explain how the opponent *could have punished* the mistake.
+    4. **Tactics:** If a move is tagged [TACTICAL THEME], explain the motif (e.g., "This creates a fork against the King and Rook").
+    5. **Tone:** Insightful, educational, severe on blunders but encouraging on potential.
+
+    **Output Format (Strict JSON):**
+    Return a JSON object where keys are the move numbers (e.g., "12" or "12...") and values are objects containing:
+    - "analysis": A rich paragraph of coaching.
+    - "pv_explanation": (Only for Errors) An ARRAY of strings explaining the engine's best line move-by-move.
+
+    **Example Output:**
+    {
+        "5": {
+            "analysis": "Excellent development! By controlling the center with d4, you restrict Black's bishop. This is standard theory in the ${opening}."
+        },
+        "12": {
+            "analysis": "This is a serious positional mistake. While it looks aggressive, pushing the f-pawn here permanently weakens your King's shelter. A better plan was developing the Knight to e2 to support the center.",
+            "pv_explanation": [
+                "Nf3 would have defended the h4 square.",
+                "Be7 prepares to castle, keeping the balance.",
+                "Now White can castle safely."
+            ]
+        }
+    }
+
+    **Game Log to Analyze:**
+    ${log}
+    `;
+
+    try {
+        const response = await fetch(MODEL_ENDPOINT + `?key=${key}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: { response_mime_type: "application/json" }
+            })
+        });
+
+        const data = await response.json();
+        if (data.error) throw new Error(data.error.message);
+
+        const jsonText = data.candidates[0].content.parts[0].text.replace(/```json/g, '').replace(/```/g, '');
+        geminiComments = JSON.parse(jsonText);
+
+    } catch (e) {
+        console.error("Gemini Error:", e);
+        geminiComments = { 1: { analysis: "I'm having trouble analyzing this deep strategy right now. Please check your API key or try again." } };
+    }
+}
 
         // --- 11. CHAT ---
         async function sendChatMessage() {
