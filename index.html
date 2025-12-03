@@ -873,7 +873,7 @@
         function onSnapEnd () {}
 
 
-        // --- 8. ANALYSIS PIPELINE (CORRECTED "BOOK" LOGIC) ---
+        // --- 8. ANALYSIS PIPELINE (CORRECTED "BOOK" & "BLUNDER" LOGIC) ---
         async function startAnalysis() {
             const apiKey = localStorage.getItem('gemini_api_key');
             if (!apiKey) { alert("Please add API Key."); openSettings(); return; }
@@ -901,7 +901,6 @@
                     const turnBefore = tempGame.turn();
 
                     // --- NEW BOOK MOVE CHECK ---
-                    // We check if the move played is in the Master DB for the *current* position (fenBefore)
                     let bookMoves = [];
                     let isBook = false;
                     let openingData = null;
@@ -914,7 +913,6 @@
                             if (openingData) openingName = openingData;
                             
                             // Check if user move is in book
-                            // Convert user move to UCI to compare
                             const userUci = move.from + move.to + (move.promotion || '');
                             if (bookMoves.includes(userUci)) isBook = true;
                         }
@@ -968,30 +966,53 @@
                         scoreAfter = parseEvalToNumber(postMoveResult.eval);
                     }
 
-                    let evalLoss = 0;
-                    if (move.color === 'w') evalLoss = scoreBefore - scoreAfter;
-                    else evalLoss = scoreAfter - scoreBefore; 
-
-                    // --- CLASSIFICATION LOGIC ---
+                    // --- HUMAN CLASSIFICATION LOGIC ---
                     let cls = "Neutral";
-                    const tacticAlert = isMate ? "Checkmate" : detectTactics(tempGame, move);
+                    
+                    // Perspective of the person moving
+                    let evalDiff = scoreBefore - scoreAfter; 
+                    if (move.color === 'b') evalDiff = scoreAfter - scoreBefore;
 
-                    if (isMate) cls = "Best"; 
-                    else if (isBook) cls = "Book"; // Force Book if in DB
-                    else if (move.san === bestMoveSan) cls = "Best";
-                    else {
-                        // Cap loss if winning
-                        let adjustedLoss = evalLoss;
-                        const winning = (move.color === 'w' && scoreBefore > 5) || (move.color === 'b' && scoreBefore < -5);
-                        if (winning && evalLoss > 0) adjustedLoss = evalLoss * 0.3; 
+                    // 1. Absolute Mate Logic
+                    if (isMate) {
+                         cls = "Best";
+                    } else if (scoreAfter === -100 || evAfterStr.startsWith('M-')) {
+                         cls = "Blunder"; // You got mated
+                    } else if (isBook) {
+                         cls = "Book";
+                    } else if (move.san === bestMoveSan) {
+                         cls = "Best";
+                    } else {
+                         // 2. Human Context "Grace" Logic
+                         
+                         // Were we winning comfortably before? (> +5)
+                         const wasWinning = (move.color === 'w' && scoreBefore > 5) || (move.color === 'b' && scoreBefore < -5);
+                         // Are we still winning comfortably? (> +3.5)
+                         const stillWinning = (move.color === 'w' && scoreAfter > 3.5) || (move.color === 'b' && scoreAfter < -3.5);
+                         
+                         // Were we totally lost before? (< -5)
+                         const wasLost = (move.color === 'w' && scoreBefore < -5) || (move.color === 'b' && scoreBefore > 5);
 
-                        if (adjustedLoss <= 0.05) cls = "Best"; 
-                        else if (adjustedLoss <= 0.20) cls = "Excellent"; 
-                        else if (adjustedLoss <= 0.50) cls = "Good"; 
-                        else if (adjustedLoss <= 1.00) cls = "Inaccuracy"; 
-                        else if (adjustedLoss <= 2.00) cls = "Mistake"; 
-                        else cls = "Blunder"; 
+                         let adjustedDiff = evalDiff;
+
+                         if (wasWinning && stillWinning) {
+                             // If we go from +7 to +4, that's not a blunder in human play. It's barely an inaccuracy.
+                             adjustedDiff = evalDiff * 0.15; 
+                         } else if (wasLost) {
+                             // If we go from -6 to -8, it's not a blunder. It's desperation.
+                             adjustedDiff = evalDiff * 0.25;
+                         }
+
+                         // 3. New Thresholds (More forgiving)
+                         if (adjustedDiff <= 0.3) cls = "Best";
+                         else if (adjustedDiff <= 0.6) cls = "Excellent";
+                         else if (adjustedDiff <= 1.0) cls = "Good";
+                         else if (adjustedDiff <= 1.8) cls = "Inaccuracy"; // Was <= 1.0
+                         else if (adjustedDiff <= 2.5) cls = "Mistake"; // Was <= 2.0
+                         else cls = "Blunder"; // > 2.5 (Standard piece value is ~3)
                     }
+
+                    const tacticAlert = isMate ? "Checkmate" : detectTactics(tempGame, move);
 
                     analysisData.push({
                         eval: evAfterStr, 
