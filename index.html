@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Gemini Chess Coach Pro - Visual Suite</title>
+    <title>Gemini Chess Coach Pro</title>
     
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
@@ -17,7 +17,6 @@
     <style>
         body { background-color: #f0f2f5; touch-action: manipulation; font-family: 'Segoe UI', system-ui, sans-serif; }
         
-        /* Board Container Layout */
         .board-container {
             display: flex;
             justify-content: center;
@@ -37,32 +36,27 @@
             z-index: 1;
         }
 
-        /* SVG Arrow Layer */
         #arrowOverlay {
             position: absolute;
             top: 0;
-            left: 36px; /* 24px (Bar) + 12px (Gap) */
+            left: 36px; 
             width: calc(100% - 36px);
             height: 100%;
             pointer-events: none;
             z-index: 10;
         }
 
-        /* Move Highlighting */
-        .highlight-last {
-            background-color: rgba(255, 255, 0, 0.4) !important;
-        }
+        .highlight-last { background-color: rgba(255, 255, 0, 0.4) !important; }
 
-        /* Heatmap Overlays */
+        /* Heatmap */
         .square-control-w-1 { box-shadow: inset 0 0 0 1000px rgba(74, 222, 128, 0.2); }
         .square-control-w-2 { box-shadow: inset 0 0 0 1000px rgba(34, 197, 94, 0.4); }
         .square-control-w-3 { box-shadow: inset 0 0 0 1000px rgba(21, 128, 61, 0.6); }
-        
         .square-control-b-1 { box-shadow: inset 0 0 0 1000px rgba(248, 113, 113, 0.2); }
         .square-control-b-2 { box-shadow: inset 0 0 0 1000px rgba(239, 68, 68, 0.4); }
         .square-control-b-3 { box-shadow: inset 0 0 0 1000px rgba(185, 28, 28, 0.6); }
 
-        /* Eval Bar Styles */
+        /* Eval Bar */
         .eval-bar-container {
             flex: 0 0 24px;
             width: 24px;
@@ -75,7 +69,6 @@
             flex-direction: column-reverse;
             z-index: 5;
         }
-
         .eval-bar-fill {
             width: 100%;
             background-color: #ffffff;
@@ -83,7 +76,6 @@
             transition: height 0.5s ease-out;
             border-top: 1px solid #9ca3af;
         }
-
         .eval-score-text {
             position: absolute;
             width: 100%;
@@ -100,7 +92,7 @@
         
         .piece-417db { background-size: 100%; }
 
-        /* Coach Box Styles */
+        /* Coach Box */
         .coach-box {
             background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
             border-left: 5px solid #cbd5e1;
@@ -108,7 +100,6 @@
             position: relative;
             min-height: 160px;
         }
-        
         .coach-box.pv-active { border-left-color: #6366f1; background: #eef2ff; }
         .coach-box.practice-active { border-left-color: #f59e0b; background: #fffbeb; }
 
@@ -139,7 +130,6 @@
         ::-webkit-scrollbar-track { background: #f1f1f1; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
         
-        /* Interactive Modes */
         .pv-controls-container, .practice-controls-container { display: none; flex-direction: column; height: 100%; justify-content: space-between; }
         .pv-active .pv-controls-container { display: flex; }
         .pv-active .normal-feedback { display: none; }
@@ -502,7 +492,6 @@
             $('#board .square-55d63').removeClass('highlight-last');
         }
 
-        // --- SVG ARROWS LOGIC ---
         function clearArrows() {
             const svg = document.getElementById('arrowOverlay');
             while(svg.lastChild) svg.removeChild(svg.lastChild);
@@ -524,7 +513,6 @@
             const boardWidth = $board.width();
             const sqSize = boardWidth / 8;
             const orientation = board.orientation();
-            
             const cols = 'abcdefgh';
             const rows = '87654321';
             
@@ -537,7 +525,6 @@
 
             const start = getCoords(from);
             const end = getCoords(to);
-            
             const svg = document.getElementById('arrowOverlay');
             const id = `arrow-${from}-${to}`;
             
@@ -559,11 +546,9 @@
             marker.setAttribute('refX', '2');
             marker.setAttribute('refY', '2');
             marker.setAttribute('orient', 'auto');
-            
             const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
             path.setAttribute('d', 'M0,0 L4,2 L0,4 Z');
             path.setAttribute('fill', color);
-            
             marker.appendChild(path);
             defs.appendChild(marker);
             svg.appendChild(defs);
@@ -614,7 +599,6 @@
             
             if (currentMoveIndex >= 0 && analysisData[currentMoveIndex]) {
                 const data = analysisData[currentMoveIndex];
-                
                 if (typeof data.eval === 'string' && data.eval.startsWith('M')) {
                     const mateIn = parseInt(data.eval.substring(1));
                     evalVal = mateIn > 0 ? 10 : -10; 
@@ -623,7 +607,6 @@
                     evalVal = parseFloat(data.eval);
                     evalTextEl.innerText = Math.abs(evalVal).toFixed(2);
                 }
-
                 if(data.wdl) {
                     const winP = (data.wdl[0] / 10).toFixed(0);
                     wdlText = `Win: ${winP}%`;
@@ -635,7 +618,6 @@
                 evalVal = 0.3;
                 wdlEl.classList.add('hidden');
             }
-
             const percentage = 50 + (Math.max(-5, Math.min(5, evalVal)) * 10); 
             barFill.style.height = `${percentage}%`;
             evalTextEl.style.color = percentage > 90 ? '#333' : (percentage < 10 ? '#fff' : '#999');
@@ -645,14 +627,11 @@
             if(currentMoveIndex < 0 || !analysisData[currentMoveIndex]) return;
             const control = analysisData[currentMoveIndex].control;
             if(!control) return;
-
             const squares = ['a8','b8','c8','d8','e8','f8','g8','h8','a7','b7','c7','d7','e7','f7','g7','h7','a6','b6','c6','d6','e6','f6','g6','h6','a5','b5','c5','d5','e5','f5','g5','h5','a4','b4','c4','d4','e4','f4','g4','h4','a3','b3','c3','d3','e3','f3','g3','h3','a2','b2','c2','d2','e2','f2','g2','h2','a1','b1','c1','d1','e1','f1','g1','h1'];
-
             control.forEach((val, idx) => {
                 if (val === 0) return;
                 const sq = squares[idx];
                 const $sq =  $('#board .square-' + sq);
-                
                 if (val > 0) { 
                     if (val >= 3) $sq.addClass('square-control-w-3');
                     else if (val === 2) $sq.addClass('square-control-w-2');
@@ -674,7 +653,6 @@
         // --- 6. COACH BOX LOGIC ---
         function updateCoachBox() {
             if(interactiveState.mode !== 'none') return;
-
             const contentDiv = document.getElementById('feedbackContent');
             const placeholder = document.getElementById('feedbackPlaceholder');
             const box = document.getElementById('coachBox');
@@ -732,23 +710,20 @@
             }
         }
 
-        // --- 7. INTERACTIVE MODES (PV & PRACTICE) ---
+        // --- 7. INTERACTIVE MODES ---
         function stopInteractiveMode() {
             interactiveState.mode = 'none';
             interactiveState.tempGame = null;
-            
             document.getElementById('coachBox').classList.remove('pv-active', 'practice-active');
             document.getElementById('board').classList.remove('board-pv-highlight', 'board-practice-mode');
             document.getElementById('pvModeBadge').classList.add('hidden');
             document.getElementById('practiceModeBadge').classList.add('hidden');
             document.getElementById('mainNavButtons').style.opacity = '1';
             document.getElementById('mainNavButtons').style.pointerEvents = 'auto';
-            
             if(board) board.draggable = false; 
             updateUI();
         }
 
-        // A. PV REVIEW
         function startPvReview() {
             if (currentMoveIndex < 0 || !analysisData[currentMoveIndex]) return;
             const data = analysisData[currentMoveIndex];
@@ -757,7 +732,6 @@
             interactiveState.mode = 'pv';
             interactiveState.tempGame = new Chess(data.fenBefore);
             interactiveState.pvIndex = -1;
-            
             interactiveState.pvMoves = [];
             const moveStrings = data.pv.split(' ');
             const limit = Math.min(moveStrings.length, 6);
@@ -827,7 +801,6 @@
             }
         }
 
-        // B. PRACTICE MODE
         function startPracticeMode() {
             if (currentMoveIndex < 0 || !analysisData[currentMoveIndex]) return;
             const data = analysisData[currentMoveIndex];
@@ -869,13 +842,7 @@
 
         function onDrop (source, target) {
             if (interactiveState.mode !== 'practice') return 'snapback';
-
-            var move = interactiveState.tempGame.move({
-                from: source,
-                to: target,
-                promotion: 'q' 
-            });
-
+            var move = interactiveState.tempGame.move({ from: source, to: target, promotion: 'q' });
             if (move === null) return 'snapback';
 
             const uciMove = source + target + (move.promotion ? move.promotion : '');
@@ -903,7 +870,7 @@
         function onSnapEnd () {}
 
 
-        // --- 8. ANALYSIS PIPELINE (CORRECTED MATH) ---
+        // --- 8. ANALYSIS PIPELINE (CORRECTED "BOOK" LOGIC) ---
         async function startAnalysis() {
             const apiKey = localStorage.getItem('gemini_api_key');
             if (!apiKey) { alert("Please add API Key."); openSettings(); return; }
@@ -930,15 +897,31 @@
                     const fenBefore = tempGame.fen();
                     const turnBefore = tempGame.turn();
 
-                    // External Data (Before Move)
-                    let openingData = (i < 12) ? await fetchOpening(fenBefore) : null;
-                    if(openingData) openingName = openingData;
+                    // --- NEW BOOK MOVE CHECK ---
+                    // We check if the move played is in the Master DB for the *current* position (fenBefore)
+                    let bookMoves = [];
+                    let isBook = false;
+                    let openingData = null;
+
+                    if (i < 15) { // Only check book for first 15 moves
+                        const bookResult = await fetchBookData(fenBefore);
+                        if (bookResult) {
+                            bookMoves = bookResult.moves.map(m => m.uci); // List of UCI moves masters played
+                            openingData = bookResult.opening ? bookResult.opening.name : null;
+                            if (openingData) openingName = openingData;
+                            
+                            // Check if user move is in book
+                            // Convert user move to UCI to compare
+                            const userUci = move.from + move.to + (move.promotion || '');
+                            if (bookMoves.includes(userUci)) isBook = true;
+                        }
+                    }
                     
                     let tablebaseData = (getPieceCount(fenBefore) <= 7) ? await fetchTablebase(fenBefore) : null;
 
                     // 1. ENGINE BEFORE
                     const preMoveResult = await runStockfish(fenBefore);
-                    let scoreBefore = parseEvalToNumber(preMoveResult.eval); // Standardized to White
+                    let scoreBefore = parseEvalToNumber(preMoveResult.eval);
                     
                     if (tablebaseData === 'win') scoreBefore = (turnBefore === 'w') ? 10 : -10;
                     if (tablebaseData === 'loss') scoreBefore = (turnBefore === 'w') ? -10 : 10;
@@ -950,11 +933,7 @@
 
                     if(preMoveResult.bestMove && preMoveResult.bestMove !== '-') {
                         const simGame = new Chess(fenBefore);
-                        const bm = simGame.move({ 
-                            from: preMoveResult.bestMove.substring(0,2), 
-                            to: preMoveResult.bestMove.substring(2,4), 
-                            promotion: 'q' 
-                        });
+                        const bm = simGame.move({ from: preMoveResult.bestMove.substring(0,2), to: preMoveResult.bestMove.substring(2,4), promotion: 'q' });
                         if(bm) {
                             bestMoveSan = bm.san;
                             bestMoveStats = getDetailedMoveStats(simGame, bm, fenBefore);
@@ -966,9 +945,6 @@
                     tempGame.move(move.san);
                     const fenAfter = tempGame.fen();
                     const userMoveStats = getDetailedMoveStats(tempGame, move, fenBefore);
-
-                    // --- CHECK IF THIS IS A BOOK MOVE (LICHESS API) ---
-                    const knownOpening = (i < 15) ? await fetchOpening(fenAfter) : null;
 
                     // 4. POST MOVE ANALYSIS
                     const isMate = tempGame.in_checkmate();
@@ -989,39 +965,29 @@
                         scoreAfter = parseEvalToNumber(postMoveResult.eval);
                     }
 
-                    // Strict Math: Loss Calculation
                     let evalLoss = 0;
                     if (move.color === 'w') evalLoss = scoreBefore - scoreAfter;
                     else evalLoss = scoreAfter - scoreBefore; 
 
-                    // --- STRICT CLASSIFICATION ---
+                    // --- CLASSIFICATION LOGIC ---
                     let cls = "Neutral";
                     const tacticAlert = isMate ? "Checkmate" : detectTactics(tempGame, move);
 
-                    // 1. Forced Rules
                     if (isMate) cls = "Best"; 
+                    else if (isBook) cls = "Book"; // Force Book if in DB
                     else if (move.san === bestMoveSan) cls = "Best";
-                    else if (knownOpening && evalLoss < 1.0) cls = "Book"; 
                     else {
-                        // 2. Official Thresholds
-                        // Cap loss if huge advantage
+                        // Cap loss if winning
                         let adjustedLoss = evalLoss;
                         const winning = (move.color === 'w' && scoreBefore > 5) || (move.color === 'b' && scoreBefore < -5);
                         if (winning && evalLoss > 0) adjustedLoss = evalLoss * 0.3; 
-                        
-                        // Strict Opening Logic (Moves 1-10)
-                        if (i < 10) {
-                             if (adjustedLoss < 0.5) cls = "Good";
-                             else if (adjustedLoss < 1.5) cls = "Inaccuracy";
-                             else cls = "Mistake"; // Hard to blunder early unless hanging piece
-                        } else {
-                            if (adjustedLoss <= 0.05) cls = "Best";
-                            else if (adjustedLoss <= 0.20) cls = "Excellent"; 
-                            else if (adjustedLoss <= 0.50) cls = "Good"; 
-                            else if (adjustedLoss <= 1.00) cls = "Inaccuracy"; 
-                            else if (adjustedLoss <= 2.00) cls = "Mistake"; 
-                            else cls = "Blunder"; 
-                        }
+
+                        if (adjustedLoss <= 0.05) cls = "Best"; 
+                        else if (adjustedLoss <= 0.20) cls = "Excellent"; 
+                        else if (adjustedLoss <= 0.50) cls = "Good"; 
+                        else if (adjustedLoss <= 1.00) cls = "Inaccuracy"; 
+                        else if (adjustedLoss <= 2.00) cls = "Mistake"; 
+                        else cls = "Blunder"; 
                     }
 
                     analysisData.push({
@@ -1035,7 +1001,7 @@
                         color: move.color,
                         classification: cls,
                         fenBefore: fenBefore,
-                        opening: openingData || knownOpening,
+                        opening: openingName,
                         tactic: tacticAlert,
                         control: calculateControl(tempGame),
                         isMate: isMate,
@@ -1043,7 +1009,6 @@
                     });
                 }
 
-                // PASS 2: GEMINI
                 if (!isAnalyzing) return;
                 document.getElementById('statusTitle').innerText = "Consulting Coach...";
                 document.getElementById('geminiStatus').classList.remove('hidden');
@@ -1068,13 +1033,10 @@
             return new Promise(resolve => {
                 if (!stockfish) initStockfish();
                 const tId = setTimeout(() => resolve({ eval: "0.00", bestMove: "-", pv: "", wdl: null }), 4000);
-                
                 stockfish.postMessage('stop');
                 stockfish.postMessage('position fen ' + fen);
                 stockfish.postMessage('go depth 12'); 
-
                 let best="-", ev="0.00", pv="", wdl=null;
-
                 const list = (e) => {
                     const l = e.data;
                     if (l.includes(' pv ')) pv = l.split(' pv ')[1];
@@ -1093,7 +1055,7 @@
             });
         }
 
-        // --- 9. HELPERS (DEEP STATS) ---
+        // --- 9. HELPERS ---
         function getDetailedMoveStats(gameObj, moveObj, oldFen) {
             const getMat = (fen) => {
                 let s = 0;
@@ -1103,7 +1065,6 @@
                 });
                 return (moveObj.color === 'w') ? s : -s; 
             };
-
             const getCenter = (gameInst) => {
                 const ctrl = calculateControl(gameInst);
                 const centerIndices = [35, 36, 27, 28];
@@ -1111,7 +1072,6 @@
                 centerIndices.forEach(i => score += ctrl[i]);
                 return (moveObj.color === 'w') ? score : -score;
             };
-
             return {
                 material: getMat(gameObj.fen()),
                 center: getCenter(gameObj),
@@ -1120,7 +1080,6 @@
             };
         }
 
-        // FIXED: Just parse the number. runStockfish already handles side perspective.
         function parseEvalToNumber(evalStr) {
             if (typeof evalStr === 'string' && evalStr.startsWith('M')) {
                 return parseInt(evalStr.replace('M', '')) > 0 ? 10 : -10;
@@ -1135,8 +1094,18 @@
 
         function getPieceCount(fen) { return fen.split(' ')[0].replace(/[^a-zA-Z]/g,'').length; }
 
+        // Updated API fetcher that returns MOVES + NAME
+        async function fetchBookData(fen) {
+            try { 
+                const res = await fetch(`https://explorer.lichess.ovh/masters?fen=${fen}`);
+                if(res.ok) return await res.json();
+            } catch(e){ return null; }
+            return null;
+        }
+        
         async function fetchOpening(fen) {
-            try { return (await (await fetch(`https://explorer.lichess.ovh/masters?fen=${fen}`)).json()).opening?.name; } catch(e){return null;}
+             const data = await fetchBookData(fen);
+             return data && data.opening ? data.opening.name : null;
         }
 
         async function fetchTablebase(fen) {
@@ -1154,12 +1123,10 @@
             let ctrl = new Array(64).fill(0);
             const squares = ['a8','b8','c8','d8','e8','f8','g8','h8','a7','b7','c7','d7','e7','f7','g7','h7','a6','b6','c6','d6','e6','f6','g6','h6','a5','b5','c5','d5','e5','f5','g5','h5','a4','b4','c4','d4','e4','f4','g4','h4','a3','b3','c3','d3','e3','f3','g3','h3','a2','b2','c2','d2','e2','f2','g2','h2','a1','b1','c1','d1','e1','f1','g1','h1'];
             const turn = gameObj.turn();
-            
             gameObj.moves({verbose:true}).forEach(m => {
                 const idx = squares.indexOf(m.to);
                 if(idx>-1) ctrl[idx] += (turn==='w'?1:-1);
             });
-            
             const fen = gameObj.fen();
             const oppFen = fen.replace(turn==='w'?' w ':' b ', turn==='w'?' b ':' w ').replace(/ [a-h][36] /, ' - '); 
             const g2 = new Chess(oppFen);
@@ -1167,7 +1134,6 @@
                 const idx = squares.indexOf(m.to);
                 if(idx>-1) ctrl[idx] += (turn==='w'?-1:1);
             });
-            
             return ctrl;
         }
         
@@ -1183,7 +1149,7 @@
             return s;
         }
 
-        // --- 10. GEMINI API (CONVERSATIONAL & NO RAW DATA) ---
+        // --- 10. GEMINI API (NATURAL LANGUAGE) ---
         async function getGeminiCommentary(key, focus, opening) {
             let log = `Game Context:\nOpening: ${opening}\n\n`;
             
@@ -1262,12 +1228,10 @@
             const txt = document.getElementById('chatInput').value;
             const key = localStorage.getItem('gemini_api_key');
             if(!key || !txt) return;
-            
             const hist = document.getElementById('chatHistory');
             hist.innerHTML += `<div class="bg-indigo-50 p-2 rounded mb-2 text-right"><b>You:</b> ${txt}</div>`;
             document.getElementById('chatInput').value = "";
             hist.scrollTop = hist.scrollHeight;
-
             try {
                 const res = await fetch(MODEL_ENDPOINT+`?key=${key}`, {
                     method:'POST',
