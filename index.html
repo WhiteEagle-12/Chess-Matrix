@@ -903,7 +903,7 @@
         function onSnapEnd () {}
 
 
-        // --- 8. ANALYSIS PIPELINE (REVAMPED CLASSIFICATION) ---
+        // --- 8. ANALYSIS PIPELINE (CORRECTED MATH & CLASSIFICATION) ---
         async function startAnalysis() {
             const apiKey = localStorage.getItem('gemini_api_key');
             if (!apiKey) { alert("Please add API Key."); openSettings(); return; }
@@ -930,14 +930,17 @@
                     const fenBefore = tempGame.fen();
                     const turnBefore = tempGame.turn();
 
-                    // External Data
+                    // External Data (Before Move)
                     let openingData = (i < 12) ? await fetchOpening(fenBefore) : null;
                     if(openingData) openingName = openingData;
+                    
                     let tablebaseData = (getPieceCount(fenBefore) <= 7) ? await fetchTablebase(fenBefore) : null;
 
                     // 1. ENGINE BEFORE
                     const preMoveResult = await runStockfish(fenBefore);
-                    let scoreBefore = getAbsoluteScore(preMoveResult.eval, turnBefore);
+                    let scoreBefore = parseEvalToNumber(preMoveResult.eval);
+                    
+                    // Tablebase overrides (force high values for wins)
                     if (tablebaseData === 'win') scoreBefore = (turnBefore === 'w') ? 10 : -10;
                     if (tablebaseData === 'loss') scoreBefore = (turnBefore === 'w') ? -10 : 10;
 
@@ -963,12 +966,11 @@
                     // 3. EXECUTE USER MOVE
                     tempGame.move(move.san);
                     const fenAfter = tempGame.fen();
-                    const turnAfter = tempGame.turn();
                     const userMoveStats = getDetailedMoveStats(tempGame, move, fenBefore);
 
                     // --- CHECK IF THIS IS A BOOK MOVE (LICHESS API) ---
-                    // We check if the resulting position is a known Opening
-                    const knownOpening = (i < 15) ? await fetchOpening(fenAfter) : null;
+                    // We check if the *resulting* position is a known Opening
+                    const knownOpening = (i < 16) ? await fetchOpening(fenAfter) : null;
 
                     // 4. POST MOVE ANALYSIS
                     const isMate = tempGame.in_checkmate();
@@ -986,34 +988,49 @@
                     } else {
                         const postMoveResult = await runStockfish(fenAfter);
                         evAfterStr = postMoveResult.eval;
-                        scoreAfter = getAbsoluteScore(postMoveResult.eval, turnAfter);
+                        scoreAfter = parseEvalToNumber(postMoveResult.eval);
                     }
 
                     // Calculate Loss (How much worse did the position get for the mover?)
-                    // If White moved: (Score Before - Score After)
-                    // If Black moved: (Score After - Score Before) -> Because Black wants negative scores
+                    // Stockfish score is already normalized to White (e.g. +1.0 is good for White).
+                    // If White moved: We want (ScoreBefore - ScoreAfter). 
+                    //    Ex: 1.77 -> 1.73. Loss = 0.04.
+                    // If Black moved: We want (ScoreAfter - ScoreBefore). 
+                    //    Ex: -1.73 (White winning) -> -1.77 (White winning more). 
+                    //    Wait, Black wants NEGATIVE. 
+                    //    If Black moves and score goes from -1.0 to -0.5 (Good for Black), 
+                    //    Gain = (-0.5) - (-1.0) = +0.5. 
+                    //    Loss = (-1.0) - (-0.5) = -0.5 (Negative loss = Gain).
+                    //    If Black moves and score goes from -1.0 to +1.0 (Bad for Black),
+                    //    Loss = (ScoreAfter - ScoreBefore) = 1.0 - (-1.0) = 2.0. Correct.
+                    
                     let evalLoss = 0;
                     if (move.color === 'w') evalLoss = scoreBefore - scoreAfter;
                     else evalLoss = scoreAfter - scoreBefore; 
 
-                    // --- NEW CLASSIFICATION LOGIC (LICHESS STANDARD) ---
+                    // --- CLASSIFICATION LOGIC (LICHESS / CHESS.COM STANDARD) ---
                     let cls = "Neutral";
                     const tacticAlert = isMate ? "Checkmate" : detectTactics(tempGame, move);
 
                     // 1. Forced Rules
                     if (isMate) cls = "Best"; 
                     else if (move.san === bestMoveSan) cls = "Best";
-                    else if (knownOpening && evalLoss < 1.0) cls = "Book"; // Allow book moves even if engine dislikes slightly
+                    else if (knownOpening && evalLoss < 1.0) cls = "Book"; // Allow book moves
                     else {
                         // 2. Centipawn Loss Thresholds
-                        // Cap loss if already winning significantly (e.g. +5.0)
+                        // If already winning huge (e.g. +8), mistakes matter less.
+                        // Cap loss if we are winning by > 5.0
                         let adjustedLoss = evalLoss;
-                        if (Math.abs(scoreBefore) > 5.0 && evalLoss > 0) adjustedLoss = evalLoss * 0.5; // Grace period
+                        
+                        // Winning bonus: If I am white and score > 5, or Black and score < -5
+                        const winning = (move.color === 'w' && scoreBefore > 5) || (move.color === 'b' && scoreBefore < -5);
+                        if (winning && evalLoss > 0) adjustedLoss = evalLoss * 0.3; // Very lenient if winning
 
-                        if (adjustedLoss <= 0.2) cls = "Excellent"; 
-                        else if (adjustedLoss <= 0.5) cls = "Good"; 
-                        else if (adjustedLoss <= 1.0) cls = "Inaccuracy"; 
-                        else if (adjustedLoss <= 2.0) cls = "Mistake"; 
+                        if (adjustedLoss <= 0.05) cls = "Best";
+                        else if (adjustedLoss <= 0.20) cls = "Excellent"; 
+                        else if (adjustedLoss <= 0.50) cls = "Good"; 
+                        else if (adjustedLoss <= 1.00) cls = "Inaccuracy"; 
+                        else if (adjustedLoss <= 2.00) cls = "Mistake"; 
                         else cls = "Blunder"; 
                     }
 
@@ -1113,12 +1130,12 @@
             };
         }
 
-        function getAbsoluteScore(evalStr, turn) {
-            let val = 0;
+        // FIXED: Just parse the number. runStockfish already handles side perspective.
+        function parseEvalToNumber(evalStr) {
             if (typeof evalStr === 'string' && evalStr.startsWith('M')) {
-                val = parseInt(evalStr.replace('M', '')) > 0 ? 10 : -10;
-            } else val = parseFloat(evalStr);
-            return (turn === 'w') ? val : -val;
+                return parseInt(evalStr.replace('M', '')) > 0 ? 10 : -10;
+            }
+            return parseFloat(evalStr);
         }
 
         function estimateWDL(ev) {
