@@ -905,7 +905,7 @@
         function onSnapEnd () {}
 
 
-        // --- 8. ANALYSIS PIPELINE (DEEP DATA) ---
+        // --- 8. ANALYSIS PIPELINE (STRICT CLASSIFICATION) ---
         async function startAnalysis() {
             const apiKey = localStorage.getItem('gemini_api_key');
             if (!apiKey) { alert("Please add API Key."); openSettings(); return; }
@@ -943,7 +943,7 @@
                     if (tablebaseData === 'win') scoreBefore = (turnBefore === 'w') ? 10 : -10;
                     if (tablebaseData === 'loss') scoreBefore = (turnBefore === 'w') ? -10 : 10;
 
-                    // 2. SIMULATE BEST MOVE (DATA ENRICHMENT)
+                    // 2. SIMULATE BEST MOVE
                     let bestMoveStats = { matDiff:0, centerCtrl:0, safety:0 };
                     let bestMoveSan = preMoveResult.bestMove;
                     let bestLineSan = "";
@@ -957,7 +957,7 @@
                         });
                         if(bm) {
                             bestMoveSan = bm.san;
-                            bestMoveStats = getDetailedMoveStats(simGame, bm, fenBefore); // New Helper
+                            bestMoveStats = getDetailedMoveStats(simGame, bm, fenBefore);
                         }
                         if(preMoveResult.pv) bestLineSan = uciToSan(fenBefore, preMoveResult.pv);
                     }
@@ -966,11 +966,9 @@
                     tempGame.move(move.san);
                     const fenAfter = tempGame.fen();
                     const turnAfter = tempGame.turn();
-                    
-                    // 4. USER MOVE STATS (DATA ENRICHMENT)
                     const userMoveStats = getDetailedMoveStats(tempGame, move, fenBefore);
 
-                    // 5. POST MOVE ANALYSIS
+                    // 4. POST MOVE ANALYSIS
                     const isMate = tempGame.in_checkmate();
                     const isDraw = tempGame.in_draw() || tempGame.in_stalemate();
 
@@ -991,22 +989,21 @@
 
                     let delta = (move.color === 'w') ? (scoreAfter - scoreBefore) : (scoreBefore - scoreAfter);
 
-                    // Classification
+                    // --- STRICT CLASSIFICATION LOGIC ---
                     let cls = "Neutral";
-                    // Tactic Alert: Standard Tactic OR Checkmate
                     const tacticAlert = isMate ? "Checkmate" : detectTactics(tempGame, move);
 
                     if (isMate) {
                         cls = "Best"; 
+                    } else if (move.san === bestMoveSan) {
+                        cls = "Best";
                     } else {
-                        if (move.san === bestMoveSan) cls = "Best";
-                        else if (i < 8 && Math.abs(delta) > -0.3) cls = "Book"; 
-                        else if (delta > 2.0) cls = "Brilliant"; 
-                        else if (delta > 0.5) cls = "Great"; 
-                        else if (delta > -0.2) cls = "Good"; 
-                        else if (delta > -0.5) cls = "Inaccuracy"; 
-                        else if (delta > -1.5) cls = "Mistake"; 
-                        else if (delta > -3.0) cls = "Miss"; 
+                        if (i < 10 && Math.abs(delta) < 0.3) cls = "Book"; 
+                        else if (delta > 3.0) cls = "Brilliant"; 
+                        else if (delta > 1.0) cls = "Great"; 
+                        else if (delta >= -0.2) cls = "Good"; 
+                        else if (delta >= -0.9) cls = "Inaccuracy"; 
+                        else if (delta >= -2.0) cls = "Mistake"; 
                         else cls = "Blunder"; 
                     }
 
@@ -1025,11 +1022,7 @@
                         tactic: tacticAlert,
                         control: calculateControl(tempGame),
                         isMate: isMate,
-                        // RICH DATA FOR GEMINI
-                        stats: {
-                            user: userMoveStats,
-                            best: bestMoveStats
-                        }
+                        stats: { user: userMoveStats, best: bestMoveStats }
                     });
                 }
 
@@ -1173,7 +1166,7 @@
             return s;
         }
 
-        // --- 10. GEMINI API (UPDATED FOR DEEP COMPARISON) ---
+        // --- 10. GEMINI API (COMPARISON FOCUSED) ---
         async function getGeminiCommentary(key, focus, opening) {
             let log = `Game Context:\nOpening: ${opening}\n\n`;
             
@@ -1182,21 +1175,21 @@
                 if (!isUserTurn) return;
 
                 const isError = ["Mistake", "Blunder", "Miss", "Inaccuracy"].includes(d.classification);
-                const isInteresting = ["Best", "Great", "Brilliant", "Good", "Book"].includes(d.classification);
+                const isInteresting = ["Best", "Great", "Brilliant"].includes(d.classification);
                 const isMate = !!d.isMate;
 
-                // FILTER UPDATE: Allow ALL Interesting moves through so AI can comment on them
-                if (isError || d.tactic || isMate || isInteresting) {
+                // Filter: Always send errors/tactics. Send "Best" moves less often to save tokens, unless brilliant.
+                if (isError || d.tactic || isMate || (isInteresting && i % 3 === 0)) {
                     
                     const moveInfo = `Move ${i + 1} (${d.color}): ${d.san}`;
                     const stats = `[Eval: ${d.eval}] [Class: ${d.classification}]`;
                     
-                    // Compare User vs Best
                     let comparison = "";
                     if (d.stats && d.stats.best) {
                         const u = d.stats.user;
                         const b = d.stats.best;
-                        comparison = `\n   [STATS] User(Mat:${u.material}, Center:${u.center}) vs Best(Mat:${b.material}, Center:${b.center})`;
+                        // Explicitly contrast the data
+                        comparison = `\n   [DATA] User Move(Mat:${u.material}, Center:${u.center}, Checked:${u.isCheck}) vs Best Move(Mat:${b.material}, Center:${b.center}, Checked:${b.isCheck})`;
                     }
 
                     let tacticInfo = d.tactic ? `[TACTIC: ${d.tactic}]` : '';
@@ -1210,21 +1203,24 @@
             if (log.length < 50) log = "Game was short.";
 
             const prompt = `
-            You are a Chess Coach.
+            You are a Grandmaster Chess Coach.
             
-            **CRITICAL RULES:**
-            1. If a move is tagged [GAME OVER: CHECKMATE], the user WON. Congratulate them.
-            2. **INTERPRET THE [STATS]:**
-               - If User Center < Best Center: "You played passively. The engine preferred fighting for the center."
-               - If User Material < Best Material: "You missed a chance to win material."
-               - If stats are equal: "Solid move. You maintained the balance."
-            3. NEVER say "Standard move" or "This is a book move" without explaining WHY it is good (e.g. "Develops the knight", "Controls d4").
+            **TASK:**
+            Analyze the game based on the provided logs. 
+            
+            **GUIDELINES FOR FEEDBACK:**
+            1. **Strictly Compare:** For every Mistake/Blunder, you MUST explain WHY the Engine Best Move was better. Use the [DATA] tag.
+               - *Bad Example:* "You made a mistake."
+               - *Good Example:* "This move gives up center control (Center: 1). The engine preferred ${opening ? 'developing' : 'attacking'} because it controls key squares (Center: 3)."
+            2. **Tactics:** If [TACTIC] is present, name the motif (Pin, Skewer, Fork).
+            3. **The Best Line:** For errors, briefly narrate the "Engine Line" to show the user the consequence (e.g. "If you had played X, you would have trapped the Queen.").
+            4. **Congratulate:** If [GAME OVER: CHECKMATE], celebrate the win.
 
             **Output (Strict JSON):**
             {
-                "34": {
-                    "analysis": "A decisive finish! You spotted the forced mate correctly.",
-                    "pv_explanation": [] 
+                "12": {
+                    "analysis": "This is an Inaccuracy. You played passively. The Best Move (d4) was better because it challenges Black's center immediately, whereas your move allows Black to equalize.",
+                    "pv_explanation": ["d4 strikes the center", "exd4 opens lines", "Nxd4 centralizes the knight"] 
                 }
             }
 
