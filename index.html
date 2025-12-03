@@ -903,7 +903,7 @@
         function onSnapEnd () {}
 
 
-        // --- 8. ANALYSIS PIPELINE (CORRECTED MATH & CLASSIFICATION) ---
+        // --- 8. ANALYSIS PIPELINE (CORRECTED MATH) ---
         async function startAnalysis() {
             const apiKey = localStorage.getItem('gemini_api_key');
             if (!apiKey) { alert("Please add API Key."); openSettings(); return; }
@@ -938,9 +938,8 @@
 
                     // 1. ENGINE BEFORE
                     const preMoveResult = await runStockfish(fenBefore);
-                    let scoreBefore = parseEvalToNumber(preMoveResult.eval);
+                    let scoreBefore = parseEvalToNumber(preMoveResult.eval); // Standardized to White
                     
-                    // Tablebase overrides (force high values for wins)
                     if (tablebaseData === 'win') scoreBefore = (turnBefore === 'w') ? 10 : -10;
                     if (tablebaseData === 'loss') scoreBefore = (turnBefore === 'w') ? -10 : 10;
 
@@ -969,8 +968,7 @@
                     const userMoveStats = getDetailedMoveStats(tempGame, move, fenBefore);
 
                     // --- CHECK IF THIS IS A BOOK MOVE (LICHESS API) ---
-                    // We check if the *resulting* position is a known Opening
-                    const knownOpening = (i < 16) ? await fetchOpening(fenAfter) : null;
+                    const knownOpening = (i < 15) ? await fetchOpening(fenAfter) : null;
 
                     // 4. POST MOVE ANALYSIS
                     const isMate = tempGame.in_checkmate();
@@ -991,47 +989,39 @@
                         scoreAfter = parseEvalToNumber(postMoveResult.eval);
                     }
 
-                    // Calculate Loss (How much worse did the position get for the mover?)
-                    // Stockfish score is already normalized to White (e.g. +1.0 is good for White).
-                    // If White moved: We want (ScoreBefore - ScoreAfter). 
-                    //    Ex: 1.77 -> 1.73. Loss = 0.04.
-                    // If Black moved: We want (ScoreAfter - ScoreBefore). 
-                    //    Ex: -1.73 (White winning) -> -1.77 (White winning more). 
-                    //    Wait, Black wants NEGATIVE. 
-                    //    If Black moves and score goes from -1.0 to -0.5 (Good for Black), 
-                    //    Gain = (-0.5) - (-1.0) = +0.5. 
-                    //    Loss = (-1.0) - (-0.5) = -0.5 (Negative loss = Gain).
-                    //    If Black moves and score goes from -1.0 to +1.0 (Bad for Black),
-                    //    Loss = (ScoreAfter - ScoreBefore) = 1.0 - (-1.0) = 2.0. Correct.
-                    
+                    // Strict Math: Loss Calculation
                     let evalLoss = 0;
                     if (move.color === 'w') evalLoss = scoreBefore - scoreAfter;
                     else evalLoss = scoreAfter - scoreBefore; 
 
-                    // --- CLASSIFICATION LOGIC (LICHESS / CHESS.COM STANDARD) ---
+                    // --- STRICT CLASSIFICATION ---
                     let cls = "Neutral";
                     const tacticAlert = isMate ? "Checkmate" : detectTactics(tempGame, move);
 
                     // 1. Forced Rules
                     if (isMate) cls = "Best"; 
                     else if (move.san === bestMoveSan) cls = "Best";
-                    else if (knownOpening && evalLoss < 1.0) cls = "Book"; // Allow book moves
+                    else if (knownOpening && evalLoss < 1.0) cls = "Book"; 
                     else {
-                        // 2. Centipawn Loss Thresholds
-                        // If already winning huge (e.g. +8), mistakes matter less.
-                        // Cap loss if we are winning by > 5.0
+                        // 2. Official Thresholds
+                        // Cap loss if huge advantage
                         let adjustedLoss = evalLoss;
-                        
-                        // Winning bonus: If I am white and score > 5, or Black and score < -5
                         const winning = (move.color === 'w' && scoreBefore > 5) || (move.color === 'b' && scoreBefore < -5);
-                        if (winning && evalLoss > 0) adjustedLoss = evalLoss * 0.3; // Very lenient if winning
-
-                        if (adjustedLoss <= 0.05) cls = "Best";
-                        else if (adjustedLoss <= 0.20) cls = "Excellent"; 
-                        else if (adjustedLoss <= 0.50) cls = "Good"; 
-                        else if (adjustedLoss <= 1.00) cls = "Inaccuracy"; 
-                        else if (adjustedLoss <= 2.00) cls = "Mistake"; 
-                        else cls = "Blunder"; 
+                        if (winning && evalLoss > 0) adjustedLoss = evalLoss * 0.3; 
+                        
+                        // Strict Opening Logic (Moves 1-10)
+                        if (i < 10) {
+                             if (adjustedLoss < 0.5) cls = "Good";
+                             else if (adjustedLoss < 1.5) cls = "Inaccuracy";
+                             else cls = "Mistake"; // Hard to blunder early unless hanging piece
+                        } else {
+                            if (adjustedLoss <= 0.05) cls = "Best";
+                            else if (adjustedLoss <= 0.20) cls = "Excellent"; 
+                            else if (adjustedLoss <= 0.50) cls = "Good"; 
+                            else if (adjustedLoss <= 1.00) cls = "Inaccuracy"; 
+                            else if (adjustedLoss <= 2.00) cls = "Mistake"; 
+                            else cls = "Blunder"; 
+                        }
                     }
 
                     analysisData.push({
@@ -1193,7 +1183,7 @@
             return s;
         }
 
-        // --- 10. GEMINI API (COMPARISON FOCUSED) ---
+        // --- 10. GEMINI API (CONVERSATIONAL & NO RAW DATA) ---
         async function getGeminiCommentary(key, focus, opening) {
             let log = `Game Context:\nOpening: ${opening}\n\n`;
             
@@ -1205,7 +1195,6 @@
                 const isInteresting = ["Best", "Great", "Brilliant", "Book", "Excellent"].includes(d.classification);
                 const isMate = !!d.isMate;
 
-                // Filter: Always send errors/tactics. Send "Best" moves less often to save tokens, unless brilliant.
                 if (isError || d.tactic || isMate || (isInteresting && i % 3 === 0)) {
                     
                     const moveInfo = `Move ${i + 1} (${d.color}): ${d.san}`;
@@ -1215,8 +1204,8 @@
                     if (d.stats && d.stats.best) {
                         const u = d.stats.user;
                         const b = d.stats.best;
-                        // Explicitly contrast the data
-                        comparison = `\n   [DATA] User Move(Mat:${u.material}, Center:${u.center}, Checked:${u.isCheck}) vs Best Move(Mat:${b.material}, Center:${b.center}, Checked:${b.isCheck})`;
+                        // Format for Gemini's logic, but tell it NOT to print this raw string
+                        comparison = `Stats: User(Mat:${u.material}, Center:${u.center}, Checked:${u.isCheck}) vs Best(Mat:${b.material}, Center:${b.center}, Checked:${b.isCheck})`;
                     }
 
                     let tacticInfo = d.tactic ? `[TACTIC: ${d.tactic}]` : '';
@@ -1233,21 +1222,23 @@
             You are a Grandmaster Chess Coach.
             
             **TASK:**
-            Analyze the game based on the provided logs. 
+            Explain the moves in the provided game log.
             
-            **GUIDELINES FOR FEEDBACK:**
-            1. **Strictly Compare:** For every Mistake/Blunder, you MUST explain WHY the Engine Best Move was better. Use the [DATA] tag.
-               - *Bad Example:* "You made a mistake."
-               - *Good Example:* "This move gives up center control (Center: 1). The engine preferred ${opening ? 'developing' : 'attacking'} because it controls key squares (Center: 3)."
-            2. **Tactics:** If [TACTIC] is present, name the motif (Pin, Skewer, Fork).
-            3. **The Best Line:** For errors, briefly narrate the "Engine Line" to show the user the consequence (e.g. "If you had played X, you would have trapped the Queen.").
-            4. **Congratulate:** If [GAME OVER: CHECKMATE], celebrate the win.
+            **OUTPUT RULES (STRICT):**
+            1. **Conversational Tone:** Do NOT print tags like [DATA], [STATS], or [TACTIC] in your final output. Incorporate the information naturally into sentences.
+               - *Bad:* "[DATA] Center control +1. This is good."
+               - *Good:* "You did a great job fighting for the center here, which gives you more space than the engine's recommendation."
+            2. **Comparative Analysis:** When a move is a Mistake/Blunder, explicitly explain *what* was missed compared to the Best Move. 
+               - Did the user lose material? Say "This move drops a pawn."
+               - Did the user ignore development? Say "This is passive; developing the knight was more active."
+            3. **Opening Theory:** If a move is marked [Class: Book], acknowledge it as standard theory.
+            4. **Victory:** If [GAME OVER: CHECKMATE] appears, congratulate the user warmly.
 
-            **Output (Strict JSON):**
+            **JSON Format:**
             {
                 "12": {
-                    "analysis": "This is an Inaccuracy. You played passively. The Best Move (d4) was better because it challenges Black's center immediately, whereas your move allows Black to equalize.",
-                    "pv_explanation": ["d4 strikes the center", "exd4 opens lines", "Nxd4 centralizes the knight"] 
+                    "analysis": "This pawn push is a bit loose. While it looks aggressive, it actually weakens your king's position. The engine preferred simple development with Nf3 to keep your structure solid.",
+                    "pv_explanation": ["Nf3 controls the center", "Be7 prepares castling"] 
                 }
             }
 
