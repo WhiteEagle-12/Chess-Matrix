@@ -22,11 +22,11 @@
             display: flex;
             justify-content: center;
             align-items: stretch;
-            gap: 12px;
+            gap: 12px; /* This gap caused the offset issue */
             width: 100%;
             max-width: 480px;
             margin: 0 auto;
-            position: relative; /* Anchor for absolute children */
+            position: relative; 
         }
 
         #board { 
@@ -37,14 +37,15 @@
             z-index: 1;
         }
 
-        /* SVG Arrow Layer */
+        /* SVG Arrow Layer - FIXED OFFSET */
         #arrowOverlay {
             position: absolute;
             top: 0;
-            left: 24px; /* Offset for eval bar width (24px) */
-            width: calc(100% - 24px); /* Subtract eval bar */
+            /* 24px (Eval Bar) + 12px (Gap) = 36px */
+            left: 36px; 
+            width: calc(100% - 36px);
             height: 100%;
-            pointer-events: none; /* Let clicks pass through to board */
+            pointer-events: none;
             z-index: 10;
         }
 
@@ -920,7 +921,7 @@
         function onSnapEnd () {}
 
 
-        // --- 8. ANALYSIS PIPELINE (WITH FIXES) ---
+        // --- 8. ANALYSIS PIPELINE (RESTORED FUNCTIONALITY) ---
         async function startAnalysis() {
             const apiKey = localStorage.getItem('gemini_api_key');
             if (!apiKey) { alert("Please add API Key."); openSettings(); return; }
@@ -1146,7 +1147,7 @@
             return s;
         }
 
-        // --- 10. GEMINI API (FIXED PROMPT) ---
+        // --- 10. GEMINI API (RESTORED VERBATIM) ---
         async function getGeminiCommentary(key, focus, opening) {
             let log = `Game Context:\nOpening: ${opening}\n\n`;
             
