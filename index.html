@@ -903,7 +903,7 @@
         function onSnapEnd () {}
 
 
-        // --- 8. ANALYSIS PIPELINE (STRICT CLASSIFICATION & BOOK CHECKS) ---
+        // --- 8. ANALYSIS PIPELINE (REVAMPED CLASSIFICATION) ---
         async function startAnalysis() {
             const apiKey = localStorage.getItem('gemini_api_key');
             if (!apiKey) { alert("Please add API Key."); openSettings(); return; }
@@ -930,10 +930,9 @@
                     const fenBefore = tempGame.fen();
                     const turnBefore = tempGame.turn();
 
-                    // External Data (Before Move)
+                    // External Data
                     let openingData = (i < 12) ? await fetchOpening(fenBefore) : null;
                     if(openingData) openingName = openingData;
-                    
                     let tablebaseData = (getPieceCount(fenBefore) <= 7) ? await fetchTablebase(fenBefore) : null;
 
                     // 1. ENGINE BEFORE
@@ -967,8 +966,9 @@
                     const turnAfter = tempGame.turn();
                     const userMoveStats = getDetailedMoveStats(tempGame, move, fenBefore);
 
-                    // Check if *resulting* position is a known book position
-                    const openingAfter = (i < 15) ? await fetchOpening(fenAfter) : null;
+                    // --- CHECK IF THIS IS A BOOK MOVE (LICHESS API) ---
+                    // We check if the resulting position is a known Opening
+                    const knownOpening = (i < 15) ? await fetchOpening(fenAfter) : null;
 
                     // 4. POST MOVE ANALYSIS
                     const isMate = tempGame.in_checkmate();
@@ -989,33 +989,31 @@
                         scoreAfter = getAbsoluteScore(postMoveResult.eval, turnAfter);
                     }
 
-                    // Delta Calculation (White perspective adjustment)
-                    // If White moved, we want (Score After - Score Before)
-                    // If Black moved, we want (Score Before - Score After) -> (Loss for white = Gain for black)
-                    // Actually, simpler: Evaluation Loss logic.
-                    // For the side moving, Loss = (Score Before) - (Score After).
-                    // If ScoreBefore was 5.0, and ScoreAfter is 4.0, Loss is 1.0.
-                    
+                    // Calculate Loss (How much worse did the position get for the mover?)
+                    // If White moved: (Score Before - Score After)
+                    // If Black moved: (Score After - Score Before) -> Because Black wants negative scores
                     let evalLoss = 0;
                     if (move.color === 'w') evalLoss = scoreBefore - scoreAfter;
-                    else evalLoss = scoreAfter - scoreBefore; // Black's scores are negative, so (-4.0) - (-5.0) = 1.0 loss
+                    else evalLoss = scoreAfter - scoreBefore; 
 
-                    // --- STRICT CLASSIFICATION LOGIC (CHESS.COM STYLE) ---
+                    // --- NEW CLASSIFICATION LOGIC (LICHESS STANDARD) ---
                     let cls = "Neutral";
                     const tacticAlert = isMate ? "Checkmate" : detectTactics(tempGame, move);
 
-                    if (isMate) {
-                        cls = "Best"; 
-                    } else if (openingAfter && evalLoss < 0.6) {
-                        cls = "Book"; // Official opening move without major blunder
-                    } else if (move.san === bestMoveSan) {
-                        cls = "Best";
-                    } else {
-                        // Strict Thresholds
-                        if (evalLoss <= 0.2) cls = "Excellent"; 
-                        else if (evalLoss <= 0.5) cls = "Good"; 
-                        else if (evalLoss <= 0.9) cls = "Inaccuracy"; 
-                        else if (evalLoss <= 2.0) cls = "Mistake"; 
+                    // 1. Forced Rules
+                    if (isMate) cls = "Best"; 
+                    else if (move.san === bestMoveSan) cls = "Best";
+                    else if (knownOpening && evalLoss < 1.0) cls = "Book"; // Allow book moves even if engine dislikes slightly
+                    else {
+                        // 2. Centipawn Loss Thresholds
+                        // Cap loss if already winning significantly (e.g. +5.0)
+                        let adjustedLoss = evalLoss;
+                        if (Math.abs(scoreBefore) > 5.0 && evalLoss > 0) adjustedLoss = evalLoss * 0.5; // Grace period
+
+                        if (adjustedLoss <= 0.2) cls = "Excellent"; 
+                        else if (adjustedLoss <= 0.5) cls = "Good"; 
+                        else if (adjustedLoss <= 1.0) cls = "Inaccuracy"; 
+                        else if (adjustedLoss <= 2.0) cls = "Mistake"; 
                         else cls = "Blunder"; 
                     }
 
@@ -1030,7 +1028,7 @@
                         color: move.color,
                         classification: cls,
                         fenBefore: fenBefore,
-                        opening: openingData,
+                        opening: openingData || knownOpening,
                         tactic: tacticAlert,
                         control: calculateControl(tempGame),
                         isMate: isMate,
