@@ -37,7 +37,7 @@
             z-index: 1;
         }
 
-        /* SVG Arrow Layer - FIXED OFFSET */
+        /* SVG Arrow Layer */
         #arrowOverlay {
             position: absolute;
             top: 0;
@@ -113,8 +113,7 @@
         .coach-box.practice-active { border-left-color: #f59e0b; background: #fffbeb; }
 
         .coach-box.best { border-left-color: #22c55e; background: #f0fdf4; }
-        .coach-box.great { border-left-color: #16a34a; background: #f0fdf4; }
-        .coach-box.brilliant { border-left-color: #06b6d4; background: #ecfeff; }
+        .coach-box.excellent { border-left-color: #16a34a; background: #f0fdf4; }
         .coach-box.good { border-left-color: #84cc16; }
         .coach-box.inaccuracy { border-left-color: #facc15; background: #fefce8; } 
         .coach-box.mistake { border-left-color: #f97316; background: #fff7ed; } 
@@ -127,8 +126,7 @@
             padding: 2px 6px; border-radius: 4px; color: white; display: inline-block; margin-bottom: 4px;
         }
         .bg-best { background-color: #22c55e; }
-        .bg-great { background-color: #16a34a; }
-        .bg-brilliant { background-color: #06b6d4; }
+        .bg-excellent { background-color: #16a34a; }
         .bg-good { background-color: #84cc16; }
         .bg-inaccuracy { background-color: #eab308; color: #fff; }
         .bg-mistake { background-color: #f97316; }
@@ -905,7 +903,7 @@
         function onSnapEnd () {}
 
 
-        // --- 8. ANALYSIS PIPELINE (STRICT CLASSIFICATION) ---
+        // --- 8. ANALYSIS PIPELINE (STRICT CLASSIFICATION & BOOK CHECKS) ---
         async function startAnalysis() {
             const apiKey = localStorage.getItem('gemini_api_key');
             if (!apiKey) { alert("Please add API Key."); openSettings(); return; }
@@ -932,9 +930,10 @@
                     const fenBefore = tempGame.fen();
                     const turnBefore = tempGame.turn();
 
-                    // External Data
+                    // External Data (Before Move)
                     let openingData = (i < 12) ? await fetchOpening(fenBefore) : null;
                     if(openingData) openingName = openingData;
+                    
                     let tablebaseData = (getPieceCount(fenBefore) <= 7) ? await fetchTablebase(fenBefore) : null;
 
                     // 1. ENGINE BEFORE
@@ -968,6 +967,9 @@
                     const turnAfter = tempGame.turn();
                     const userMoveStats = getDetailedMoveStats(tempGame, move, fenBefore);
 
+                    // Check if *resulting* position is a known book position
+                    const openingAfter = (i < 15) ? await fetchOpening(fenAfter) : null;
+
                     // 4. POST MOVE ANALYSIS
                     const isMate = tempGame.in_checkmate();
                     const isDraw = tempGame.in_draw() || tempGame.in_stalemate();
@@ -987,23 +989,33 @@
                         scoreAfter = getAbsoluteScore(postMoveResult.eval, turnAfter);
                     }
 
-                    let delta = (move.color === 'w') ? (scoreAfter - scoreBefore) : (scoreBefore - scoreAfter);
+                    // Delta Calculation (White perspective adjustment)
+                    // If White moved, we want (Score After - Score Before)
+                    // If Black moved, we want (Score Before - Score After) -> (Loss for white = Gain for black)
+                    // Actually, simpler: Evaluation Loss logic.
+                    // For the side moving, Loss = (Score Before) - (Score After).
+                    // If ScoreBefore was 5.0, and ScoreAfter is 4.0, Loss is 1.0.
+                    
+                    let evalLoss = 0;
+                    if (move.color === 'w') evalLoss = scoreBefore - scoreAfter;
+                    else evalLoss = scoreAfter - scoreBefore; // Black's scores are negative, so (-4.0) - (-5.0) = 1.0 loss
 
-                    // --- STRICT CLASSIFICATION LOGIC ---
+                    // --- STRICT CLASSIFICATION LOGIC (CHESS.COM STYLE) ---
                     let cls = "Neutral";
                     const tacticAlert = isMate ? "Checkmate" : detectTactics(tempGame, move);
 
                     if (isMate) {
                         cls = "Best"; 
+                    } else if (openingAfter && evalLoss < 0.6) {
+                        cls = "Book"; // Official opening move without major blunder
                     } else if (move.san === bestMoveSan) {
                         cls = "Best";
                     } else {
-                        if (i < 10 && Math.abs(delta) < 0.3) cls = "Book"; 
-                        else if (delta > 3.0) cls = "Brilliant"; 
-                        else if (delta > 1.0) cls = "Great"; 
-                        else if (delta >= -0.2) cls = "Good"; 
-                        else if (delta >= -0.9) cls = "Inaccuracy"; 
-                        else if (delta >= -2.0) cls = "Mistake"; 
+                        // Strict Thresholds
+                        if (evalLoss <= 0.2) cls = "Excellent"; 
+                        else if (evalLoss <= 0.5) cls = "Good"; 
+                        else if (evalLoss <= 0.9) cls = "Inaccuracy"; 
+                        else if (evalLoss <= 2.0) cls = "Mistake"; 
                         else cls = "Blunder"; 
                     }
 
@@ -1175,7 +1187,7 @@
                 if (!isUserTurn) return;
 
                 const isError = ["Mistake", "Blunder", "Miss", "Inaccuracy"].includes(d.classification);
-                const isInteresting = ["Best", "Great", "Brilliant"].includes(d.classification);
+                const isInteresting = ["Best", "Great", "Brilliant", "Book", "Excellent"].includes(d.classification);
                 const isMate = !!d.isMate;
 
                 // Filter: Always send errors/tactics. Send "Best" moves less often to save tokens, unless brilliant.
