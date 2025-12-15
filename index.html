@@ -1,9 +1,10 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Gemini Chess Coach Pro</title>
+    <title>Gemini Chess Coach Pro (WASM Speed)</title>
     
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
@@ -348,7 +349,9 @@
 
     <script>
         // --- CONSTANTS ---
-        const STOCKFISH_URL = 'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js';
+        // OPTIMIZATION 1: Switching to WASM via CDN
+        // Note: Using jsdelivr which handles the wasm file logic well.
+        const STOCKFISH_URL = 'https://cdn.jsdelivr.net/npm/stockfish.js@10.0.2/stockfish.wasm.js';
         const MODEL_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
         // --- STATE ---
@@ -415,7 +418,12 @@
             try {
                 const blob = new Blob([`importScripts('${STOCKFISH_URL}');`], {type: 'application/javascript'});
                 stockfish = new Worker(URL.createObjectURL(blob));
+                
+                // OPTIMIZATION 3: Multithreading
                 stockfish.postMessage('uci');
+                // Request 2 threads (Note: might default to 1 on GH Pages if headers aren't set)
+                stockfish.postMessage('setoption name Threads value 2'); 
+                stockfish.postMessage('setoption name Hash value 32'); 
                 stockfish.postMessage('setoption name UCI_ShowWDL value true');
             } catch (e) {
                 console.error("Stockfish init failed:", e);
@@ -882,7 +890,7 @@
         function onSnapEnd () {}
 
 
-        // --- 8. ANALYSIS PIPELINE (CORRECTED) ---
+        // --- 8. ANALYSIS PIPELINE (SPEED OPTIMIZED) ---
         async function startAnalysis() {
             const apiKey = localStorage.getItem('gemini_api_key');
             if (!apiKey) { alert("Please add API Key."); openSettings(); return; }
@@ -923,11 +931,28 @@
                     }
                     
                     let tablebaseData = (getPieceCount(fenBefore) <= 7) ? await fetchTablebase(fenBefore) : null;
+                    let preMoveResult;
+                    
+                    // OPTIMIZATION 4: Skip Book Moves + OPTIMIZATION 2: Dynamic Depth
+                    if (isBook) {
+                        // Mock Result for book moves to save time
+                        preMoveResult = { eval: "0.30", bestMove: "-", pv: "", wdl: [500,500,0] };
+                    } 
+                    else {
+                        // Dynamic Depth Logic
+                        let targetDepth = 15; 
+                        
+                        // If very early in game (<10 moves) or not book, go faster
+                        if (i < 10) targetDepth = 10;
+                        
+                        preMoveResult = await runStockfish(fenBefore, targetDepth);
+                    }
 
-                    // 1. ENGINE BEFORE
-                    const preMoveResult = await runStockfish(fenBefore);
                     let scoreBefore = parseEvalToNumber(preMoveResult.eval);
                     
+                    // If blowout (score > 8.0), future calculations should be fast
+                    const isBlowout = Math.abs(scoreBefore) > 8.0;
+
                     if (tablebaseData === 'win') scoreBefore = (turnBefore === 'w') ? 20 : -20;
                     if (tablebaseData === 'loss') scoreBefore = (turnBefore === 'w') ? -20 : 20;
 
@@ -964,41 +989,40 @@
                     } else if (isDraw) {
                         scoreAfter = 0;
                         evAfterStr = "0.00";
+                    } else if (isBook) {
+                        scoreAfter = scoreBefore; // Assume book maintains equality
+                        evAfterStr = "0.30";
                     } else {
-                        const postMoveResult = await runStockfish(fenAfter);
+                        // Dynamic depth for post-move too
+                        let postDepth = 15;
+                        if (isBlowout) postDepth = 10; // Garbage time fast mode
+                        
+                        const postMoveResult = await runStockfish(fenAfter, postDepth);
                         evAfterStr = postMoveResult.eval;
                         scoreAfter = parseEvalToNumber(postMoveResult.eval);
                     }
 
-                    // --- CLASSIFICATION LOGIC (PATCHED) ---
+                    // --- CLASSIFICATION LOGIC ---
                     let cls = "Neutral";
                     
-                    // Perspective: Positive means "The move was good for the person playing it"
                     let evalDiff = scoreBefore - scoreAfter; 
                     if (move.color === 'b') evalDiff = scoreAfter - scoreBefore;
 
-                    // 1. Book / Forced Mate
                     if (isBook) {
                         cls = "Book";
                     } else if (isMate) {
                         cls = "Best";
                     } 
-                    // 2. Garbage Time Check (Game is already decided)
-                    // If score was > 8.0 or < -8.0, stop calling blunders unless they throw away the win.
-                    else if (Math.abs(scoreBefore) > 8.0) {
-                         // If I was winning (+10) and am still winning (+9), it's "Good".
-                         // If I was winning (+10) and am now equal (0), it's a Blunder.
+                    // Garbage Time Check
+                    else if (isBlowout) {
                          if (evalDiff > 4.0) cls = "Blunder"; 
                          else if (evalDiff > 2.0) cls = "Inaccuracy";
                          else cls = "Good";
                     }
-                    // 3. Normal Logic
                     else {
-                         // Grace Logic: If we are winning comfortably, be lenient.
                          const wasWinning = (move.color === 'w' && scoreBefore > 3) || (move.color === 'b' && scoreBefore < -3);
-                         
                          let adjustedDiff = evalDiff;
-                         if (wasWinning && adjustedDiff > 0) adjustedDiff *= 0.5; // Half the penalty
+                         if (wasWinning && adjustedDiff > 0) adjustedDiff *= 0.5; 
 
                          if (move.san === bestMoveSan && adjustedDiff <= 0.05) cls = "Best";
                          else if (adjustedDiff <= 0.05) cls = "Best";
@@ -1050,14 +1074,15 @@
             }
         }
 
-        function runStockfish(fen) {
+        // Updated runStockfish to accept 'depth' argument
+        function runStockfish(fen, depth) {
             return new Promise(resolve => {
                 if (!stockfish) initStockfish();
-                const tId = setTimeout(() => resolve({ eval: "0.00", bestMove: "-", pv: "", wdl: null }), 6000); // 6s timeout
+                // Shorter timeout because we are optimizing depth
+                const tId = setTimeout(() => resolve({ eval: "0.00", bestMove: "-", pv: "", wdl: null }), 4000); 
                 stockfish.postMessage('stop');
                 stockfish.postMessage('position fen ' + fen);
-                // Increased depth to 15 for better stability
-                stockfish.postMessage('go depth 15'); 
+                stockfish.postMessage('go depth ' + depth); 
                 let best="-", ev="0.00", pv="", wdl=null;
                 const list = (e) => {
                     const l = e.data;
@@ -1106,7 +1131,6 @@
         function parseEvalToNumber(evalStr) {
             if (typeof evalStr === 'string' && evalStr.startsWith('M')) {
                 const mateIn = parseInt(evalStr.replace('M', ''));
-                // M1 = 30, M2 = 25... M-1 = -30
                 const sign = mateIn > 0 ? 1 : -1;
                 const abs = Math.abs(mateIn);
                 return sign * (20 + (10 / abs));
@@ -1319,4 +1343,3 @@
     </script>
 </body>
 </html>
-
