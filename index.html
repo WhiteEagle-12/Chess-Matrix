@@ -417,6 +417,7 @@
                 stockfish = new Worker(URL.createObjectURL(blob));
                 stockfish.postMessage('uci');
                 stockfish.postMessage('setoption name UCI_ShowWDL value true');
+                stockfish.postMessage('setoption name MultiPV value 2');
             } catch (e) {
                 console.error("Stockfish init failed:", e);
             }
@@ -918,6 +919,31 @@
                     const preMoveResult = await runStockfish(fenBefore);
                     let scoreBefore = parseEvalToNumber(preMoveResult.eval);
                     
+                    // Critical Moment Detection (MultiPV)
+                    let isCritical = false;
+                    if (preMoveResult.lines && preMoveResult.lines.length >= 2) {
+                        const l1 = preMoveResult.lines[0];
+                        const l2 = preMoveResult.lines[1];
+
+                        // Helper to get numeric score for gap calculation (handle Mate)
+                        const getGapScore = (line) => {
+                            if (line.type === 'mate') {
+                                // +/- 10000 for mate
+                                return (line.rawScore > 0) ? 10000 : -10000;
+                            }
+                            return line.rawScore; // Centipawns
+                        };
+
+                        const s1 = getGapScore(l1);
+                        const s2 = getGapScore(l2);
+                        const gap = Math.abs(s1 - s2);
+
+                        // Threshold: 150 centipawns (1.5 pawns)
+                        if (gap > 150) {
+                            isCritical = true;
+                        }
+                    }
+
                     // Handle Tablebase "Truth"
                     const turnBefore = tempGame.turn();
                     if (tablebaseData === 'win') scoreBefore = (turnBefore === 'w') ? 100 : -100;
@@ -1036,6 +1062,7 @@
                         control: calculateControl(tempGame),
                         isMate: isMate,
                         materialDelta: materialDelta,
+                        isCritical: isCritical,
                         stats: { user: userMoveStats, best: bestMoveStats }
                     });
                 }
@@ -1063,23 +1090,57 @@
         function runStockfish(fen) {
             return new Promise(resolve => {
                 if (!stockfish) initStockfish();
-                const tId = setTimeout(() => resolve({ eval: "0.00", bestMove: "-", pv: "", wdl: null }), 4000);
+                const tId = setTimeout(() => resolve({ eval: "0.00", bestMove: "-", pv: "", wdl: null, lines: [] }), 4000);
                 stockfish.postMessage('stop');
                 stockfish.postMessage('position fen ' + fen);
                 stockfish.postMessage('go depth 12'); 
+
                 let best="-", ev="0.00", pv="", wdl=null;
+                let lines = [];
+
                 const list = (e) => {
                     const l = e.data;
-                    if (l.includes(' pv ')) pv = l.split(' pv ')[1];
+
+                    if (l.startsWith('info') && l.includes('multipv') && l.includes('score')) {
+                        const matchPv = l.match(/multipv (\d+)/);
+                        const matchScore = l.match(/score (cp|mate) (-?\d+)/);
+                        const matchPvStr = l.split(' pv ')[1];
+
+                        if (matchPv && matchScore && matchPvStr) {
+                            const lineIdx = parseInt(matchPv[1]) - 1;
+                            let rawVal = parseInt(matchScore[2]);
+                            let absScore = (fen.includes(' b ') ? -rawVal : rawVal);
+                            let scoreStr = (matchScore[1] === 'mate') ? "M" + absScore : (absScore / 100).toFixed(2);
+
+                            lines[lineIdx] = {
+                                score: scoreStr,
+                                pv: matchPvStr,
+                                rawScore: absScore,
+                                type: matchScore[1]
+                            };
+
+                            if (lineIdx === 0) {
+                                pv = matchPvStr;
+                                ev = scoreStr;
+                            }
+                        }
+                    }
+
                     if (l.includes(' wdl ')) { const m=l.match(/wdl (\d+) (\d+) (\d+)/); if(m) wdl=[parseInt(m[1]), parseInt(m[2]), parseInt(m[3])]; }
-                    if (l.includes('cp ')) { const m=l.match(/cp (-?\d+)/); if(m) ev=(parseInt(m[1])/100 * (fen.includes(' b ')?-1:1)).toFixed(2); }
-                    if (l.includes('mate ')) { const m=l.match(/mate (-?\d+)/); if(m) ev="M"+(parseInt(m[1])*(fen.includes(' b ')?-1:1)); }
+
                     if (l.startsWith('bestmove')) {
                         clearTimeout(tId);
                         best = l.split(' ')[1];
                         stockfish.removeEventListener('message', list);
+
+                        if (lines.length === 0) {
+                             let fallbackRaw = parseFloat(ev) * 100;
+                             if(ev.toString().startsWith('M')) fallbackRaw = parseInt(ev.substring(1));
+                             lines.push({ score: ev, pv: pv, rawScore: fallbackRaw, type: ev.toString().startsWith('M')?'mate':'cp' });
+                        }
+
                         if(!wdl && !ev.toString().startsWith('M')) wdl = estimateWDL(parseFloat(ev));
-                        resolve({ eval: ev, bestMove: best, pv: pv, wdl: wdl });
+                        resolve({ eval: ev, bestMove: best, pv: pv, wdl: wdl, lines: lines });
                     }
                 };
                 stockfish.addEventListener('message', list);
@@ -1235,6 +1296,11 @@
                     let tacticInfo = d.tactic ? `[TACTIC: ${d.tactic}]` : '';
                     if (isMate) tacticInfo = "[GAME OVER: CHECKMATE]"; 
                     
+                    // Critical Moment Tag
+                    if (d.isCritical && d.classification === 'Best') {
+                        tacticInfo += " [HERO MOMENT: The user found the ONLY move that survives/wins!]";
+                    }
+
                     const bestLineInfo = isError ? `\n   -> Engine Best: ${d.bestMoveSan}\n   -> Engine Line: ${d.pvSan}` : '';
                     
                     log += `${moveInfo} ${stats} ${tacticInfo} ${comparison}${bestLineInfo}\nFEN: ${d.fenBefore}\n\n`;
