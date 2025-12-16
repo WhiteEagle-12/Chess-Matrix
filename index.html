@@ -1410,7 +1410,7 @@
 
             **TONE ADJUSTMENT (CRITICAL):**
             The [GAME SUMMARY] contains the overall ACPL and Complexity. Use this to set the tone for your move comments:
-            
+
             1. **Master-Level Precision** -> Adopt persona: "The Encouraging Mentor".
                - Be enthusiastic and supportive.
                - Frame 'Inaccuracy' as minor technical oversights.
@@ -1454,8 +1454,22 @@
                     body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
                 });
                 const d = await res.json();
-                geminiComments = JSON.parse(d.candidates[0].content.parts[0].text.replace(/```json/g,'').replace(/```/g,''));
-            } catch(e) { console.error(e); geminiComments={}; }
+                const rawText = d.candidates[0].content.parts[0].text;
+
+                // Robust JSON Extraction
+                const jsonStart = rawText.indexOf('{');
+                const jsonEnd = rawText.lastIndexOf('}');
+
+                if (jsonStart !== -1 && jsonEnd !== -1) {
+                    const jsonStr = rawText.substring(jsonStart, jsonEnd + 1);
+                    geminiComments = JSON.parse(jsonStr);
+                } else {
+                    throw new Error("No JSON found in response");
+                }
+            } catch(e) {
+                console.error("Gemini API Error:", e);
+                geminiComments = {};
+            }
         }
 
         // --- 11. CHAT ---
