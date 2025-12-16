@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Gemini Chess Coach Pro</title>
+    <title>Gemini Chess Coach Pro (Fixed)</title>
     
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
@@ -150,7 +150,7 @@
 
     <nav class="bg-indigo-700 text-white p-3 shadow-md sticky top-0 z-50">
         <div class="max-w-2xl mx-auto flex justify-between items-center">
-            <h1 class="font-bold text-lg"><i class="fa-solid fa-chess"></i> Chess Coach AI</h1>
+            <h1 class="font-bold text-lg"><i class="fa-solid fa-chess"></i> Chess Coach Pro</h1>
             <div class="flex gap-2">
                 <button onclick="toggleHeatmap()" class="text-white hover:text-indigo-200" title="Toggle Threat Map">
                     <i class="fa-solid fa-eye"></i>
@@ -698,6 +698,7 @@
                 if (data.classification === "Best") mainComment = "Excellent find!";
                 else if (data.classification === "Mistake") mainComment = "This loses advantage.";
                 else if (data.classification === "Blunder") mainComment = "Critical error.";
+                else if (data.classification === "Book") mainComment = "Standard opening theory.";
             }
             
             document.getElementById('coachText').innerHTML = marked.parse(mainComment);
@@ -872,8 +873,7 @@
 
         function onSnapEnd () {}
 
-
-        // --- 8. ANALYSIS PIPELINE (CORRECTED "BOOK" & "BLUNDER" LOGIC) ---
+        // --- 8. ANALYSIS PIPELINE (UPDATED LOGIC) ---
         async function startAnalysis() {
             const apiKey = localStorage.getItem('gemini_api_key');
             if (!apiKey) { alert("Please add API Key."); openSettings(); return; }
@@ -898,21 +898,15 @@
                     document.getElementById('progressText').innerText = `Analyzing Move ${i+1}/${gameHistory.length}`;
 
                     const fenBefore = tempGame.fen();
-                    const turnBefore = tempGame.turn();
-
-                    // --- NEW BOOK MOVE CHECK ---
+                    
+                    // --- BOOK CHECK ---
                     let bookMoves = [];
                     let isBook = false;
-                    let openingData = null;
-
-                    if (i < 15) { // Only check book for first 15 moves
+                    if (i < 15) { 
                         const bookResult = await fetchBookData(fenBefore);
                         if (bookResult) {
-                            bookMoves = bookResult.moves.map(m => m.uci); // List of UCI moves masters played
-                            openingData = bookResult.opening ? bookResult.opening.name : null;
-                            if (openingData) openingName = openingData;
-                            
-                            // Check if user move is in book
+                            bookMoves = bookResult.moves.map(m => m.uci);
+                            if (bookResult.opening) openingName = bookResult.opening.name;
                             const userUci = move.from + move.to + (move.promotion || '');
                             if (bookMoves.includes(userUci)) isBook = true;
                         }
@@ -924,13 +918,16 @@
                     const preMoveResult = await runStockfish(fenBefore);
                     let scoreBefore = parseEvalToNumber(preMoveResult.eval);
                     
-                    if (tablebaseData === 'win') scoreBefore = (turnBefore === 'w') ? 10 : -10;
-                    if (tablebaseData === 'loss') scoreBefore = (turnBefore === 'w') ? -10 : 10;
+                    // Handle Tablebase "Truth"
+                    const turnBefore = tempGame.turn();
+                    if (tablebaseData === 'win') scoreBefore = (turnBefore === 'w') ? 100 : -100;
+                    if (tablebaseData === 'loss') scoreBefore = (turnBefore === 'w') ? -100 : 100;
 
                     // 2. SIMULATE BEST MOVE
-                    let bestMoveStats = { matDiff:0, centerCtrl:0, safety:0 };
+                    let bestMoveStats = { matDiff:0, centerCtrl:0, safety:0, rawMaterial:0 };
                     let bestMoveSan = preMoveResult.bestMove;
                     let bestLineSan = "";
+                    let bestIsMate = preMoveResult.eval.toString().startsWith("M");
 
                     if(preMoveResult.bestMove && preMoveResult.bestMove !== '-') {
                         const simGame = new Chess(fenBefore);
@@ -950,7 +947,6 @@
                     // 4. POST MOVE ANALYSIS
                     const isMate = tempGame.in_checkmate();
                     const isDraw = tempGame.in_draw() || tempGame.in_stalemate();
-
                     let scoreAfter = 0;
                     let evAfterStr = "";
                     
@@ -966,51 +962,61 @@
                         scoreAfter = parseEvalToNumber(postMoveResult.eval);
                     }
 
-                    // --- HUMAN CLASSIFICATION LOGIC ---
+                    // --- CLASSIFICATION LOGIC FIXES ---
                     let cls = "Neutral";
-                    
-                    // Perspective of the person moving
-                    let evalDiff = scoreBefore - scoreAfter; 
-                    if (move.color === 'b') evalDiff = scoreAfter - scoreBefore;
+                    let evalDiff = (move.color === 'w') ? (scoreBefore - scoreAfter) : (scoreAfter - scoreBefore);
 
-                    // 1. Absolute Mate Logic
+                    // Context Flags
+                    const isUserWinning = (move.color === 'w' && scoreBefore > 10) || (move.color === 'b' && scoreBefore < -10);
+                    const isUserLost = (move.color === 'w' && scoreBefore < -10) || (move.color === 'b' && scoreBefore > 10);
+                    const userFoundMate = evAfterStr.toString().startsWith("M") && ((move.color === 'w' && scoreAfter > 0) || (move.color === 'b' && scoreAfter < 0));
+
+                    // 1. Absolute Truths
                     if (isMate) {
-                         cls = "Best";
-                    } else if (scoreAfter === -100 || evAfterStr.startsWith('M-')) {
-                         cls = "Blunder"; // You got mated
-                    } else if (isBook) {
-                         cls = "Book";
-                    } else if (move.san === bestMoveSan) {
-                         cls = "Best";
-                    } else {
-                         // 2. Human Context "Grace" Logic
-                         
-                         // Were we winning comfortably before? (> +5)
-                         const wasWinning = (move.color === 'w' && scoreBefore > 5) || (move.color === 'b' && scoreBefore < -5);
-                         // Are we still winning comfortably? (> +3.5)
-                         const stillWinning = (move.color === 'w' && scoreAfter > 3.5) || (move.color === 'b' && scoreAfter < -3.5);
-                         
-                         // Were we totally lost before? (< -5)
-                         const wasLost = (move.color === 'w' && scoreBefore < -5) || (move.color === 'b' && scoreBefore > 5);
-
-                         let adjustedDiff = evalDiff;
-
-                         if (wasWinning && stillWinning) {
-                             // If we go from +7 to +4, that's not a blunder in human play. It's barely an inaccuracy.
-                             adjustedDiff = evalDiff * 0.15; 
-                         } else if (wasLost) {
-                             // If we go from -6 to -8, it's not a blunder. It's desperation.
-                             adjustedDiff = evalDiff * 0.25;
-                         }
-
-                         // 3. New Thresholds (More forgiving)
-                         if (adjustedDiff <= 0.3) cls = "Best";
-                         else if (adjustedDiff <= 0.6) cls = "Excellent";
-                         else if (adjustedDiff <= 1.0) cls = "Good";
-                         else if (adjustedDiff <= 1.8) cls = "Inaccuracy"; // Was <= 1.0
-                         else if (adjustedDiff <= 2.5) cls = "Mistake"; // Was <= 2.0
-                         else cls = "Blunder"; // > 2.5 (Standard piece value is ~3)
+                         cls = "Best"; 
+                    } 
+                    else if (scoreAfter === -100 || (evAfterStr.toString().startsWith('M') && !userFoundMate)) {
+                         cls = "Blunder"; // Forced mate detected against user
                     }
+                    else if (isBook) {
+                         cls = "Book";
+                    }
+                    else if (move.san === bestMoveSan) {
+                         cls = "Best";
+                    }
+                    // 2. "Mate Optimization" (Don't punish finding a slower mate)
+                    else if (bestIsMate && userFoundMate) {
+                         cls = "Excellent";
+                    }
+                    // 3. "Resignation Threshold" (Don't analyze blunders in lost positions)
+                    else if (isUserLost) {
+                         if (evalDiff > 5) cls = "Mistake"; 
+                         else cls = "Neutral";
+                    }
+                    // 4. "Winning Cushion" (Don't analyze inaccuracies when winning huge)
+                    else if (isUserWinning) {
+                         if (evalDiff > 5) cls = "Mistake"; 
+                         else cls = "Good"; 
+                    }
+                    else {
+                         // Standard Mid-Game Logic
+                         if (evalDiff <= 0.3) cls = "Best";
+                         else if (evalDiff <= 0.8) cls = "Excellent";
+                         else if (evalDiff <= 1.5) cls = "Good";
+                         else if (evalDiff <= 2.5) cls = "Inaccuracy"; 
+                         else if (evalDiff <= 4.0) cls = "Mistake"; 
+                         else cls = "Blunder"; 
+                    }
+
+                    // --- MATERIAL DELTA CALCULATION ---
+                    // Calculate if best move won more material than user move
+                    let materialDelta = 0;
+                    if (move.color === 'w') {
+                        materialDelta = bestMoveStats.rawMaterial - userMoveStats.rawMaterial;
+                    } else {
+                        materialDelta = -(bestMoveStats.rawMaterial - userMoveStats.rawMaterial);
+                    }
+                    // materialDelta > 0 means best move was better materially
 
                     const tacticAlert = isMate ? "Checkmate" : detectTactics(tempGame, move);
 
@@ -1029,6 +1035,7 @@
                         tactic: tacticAlert,
                         control: calculateControl(tempGame),
                         isMate: isMate,
+                        materialDelta: materialDelta,
                         stats: { user: userMoveStats, best: bestMoveStats }
                     });
                 }
@@ -1071,7 +1078,7 @@
                         clearTimeout(tId);
                         best = l.split(' ')[1];
                         stockfish.removeEventListener('message', list);
-                        if(!wdl && !ev.startsWith('M')) wdl = estimateWDL(parseFloat(ev));
+                        if(!wdl && !ev.toString().startsWith('M')) wdl = estimateWDL(parseFloat(ev));
                         resolve({ eval: ev, bestMove: best, pv: pv, wdl: wdl });
                     }
                 };
@@ -1087,8 +1094,11 @@
                 fen.split(' ')[0].split('').forEach(c => {
                     if(vals[c.toLowerCase()]) s += (c === c.toUpperCase() ? vals[c.toLowerCase()] : -vals[c.toLowerCase()]);
                 });
-                return (moveObj.color === 'w') ? s : -s; 
+                return s; // Positive = White ahead, Negative = Black ahead
             };
+            
+            const rawMat = getMat(gameObj.fen());
+            
             const getCenter = (gameInst) => {
                 const ctrl = calculateControl(gameInst);
                 const centerIndices = [35, 36, 27, 28];
@@ -1097,7 +1107,8 @@
                 return (moveObj.color === 'w') ? score : -score;
             };
             return {
-                material: getMat(gameObj.fen()),
+                rawMaterial: rawMat,
+                material: (moveObj.color === 'w') ? rawMat : -rawMat,
                 center: getCenter(gameObj),
                 captured: (moveObj.captured || null),
                 isCheck: gameObj.in_check()
@@ -1118,18 +1129,12 @@
 
         function getPieceCount(fen) { return fen.split(' ')[0].replace(/[^a-zA-Z]/g,'').length; }
 
-        // Updated API fetcher that returns MOVES + NAME
         async function fetchBookData(fen) {
             try { 
                 const res = await fetch(`https://explorer.lichess.ovh/masters?fen=${fen}`);
                 if(res.ok) return await res.json();
             } catch(e){ return null; }
             return null;
-        }
-        
-        async function fetchOpening(fen) {
-             const data = await fetchBookData(fen);
-             return data && data.opening ? data.opening.name : null;
         }
 
         async function fetchTablebase(fen) {
@@ -1173,33 +1178,63 @@
             return s;
         }
 
-        // --- 10. GEMINI API (NATURAL LANGUAGE) ---
+        // --- 10. GEMINI API (UPDATED PROMPT) ---
         async function getGeminiCommentary(key, focus, opening) {
-            let log = `Game Context:\nOpening: ${opening}\n\n`;
+            let log = "";
             
+            // 1. Compress Opening Book moves
+            let bookLimit = 0;
+            for(let i=0; i<analysisData.length; i++) {
+                if(analysisData[i].classification !== 'Book') break;
+                bookLimit = i;
+            }
+            
+            if (bookLimit > 2) {
+                log += `[OPENING SUMMARY]: The game started with ${opening}. Moves 1-${bookLimit+1} followed standard theory.\n\n`;
+            }
+
+            // 2. Build Move Log
             analysisData.forEach((d, i) => {
+                // Skip individual book moves if we summarized them
+                if (i <= bookLimit && d.classification === 'Book') return;
+
                 const isUserTurn = (focus === 'both' || focus === d.color);
                 if (!isUserTurn) return;
 
                 const isError = ["Mistake", "Blunder", "Miss", "Inaccuracy"].includes(d.classification);
-                const isInteresting = ["Best", "Great", "Brilliant", "Book", "Excellent"].includes(d.classification);
+                const isInteresting = ["Best", "Great", "Brilliant", "Excellent"].includes(d.classification);
                 const isMate = !!d.isMate;
-
-                if (isError || d.tactic || isMate || (isInteresting && i % 3 === 0)) {
+                
+                if (isError || d.tactic || isMate || (isInteresting && i % 4 === 0)) {
                     
                     const moveInfo = `Move ${i + 1} (${d.color}): ${d.san}`;
-                    const stats = `[Eval: ${d.eval}] [Class: ${d.classification}]`;
+                    
+                    // Interpret Score for Gemini
+                    let scoreNum = parseEvalToNumber(d.eval);
+                    let stateLabel = "Equal";
+                    if (scoreNum > 1.0) stateLabel = "White Slight Edge";
+                    if (scoreNum > 3.0) stateLabel = "White Winning";
+                    if (scoreNum < -1.0) stateLabel = "Black Slight Edge";
+                    if (scoreNum < -3.0) stateLabel = "Black Winning";
+                    if (d.eval.toString().includes("M")) stateLabel = "Forced Mate Detected";
+
+                    const stats = `[Eval: ${d.eval} (${stateLabel})] [Class: ${d.classification}]`;
                     
                     let comparison = "";
                     if (d.stats && d.stats.best) {
                         const u = d.stats.user;
                         const b = d.stats.best;
-                        // Format for Gemini's logic, but tell it NOT to print this raw string
-                        comparison = `Stats: User(Mat:${u.material}, Center:${u.center}, Checked:${u.isCheck}) vs Best(Mat:${b.material}, Center:${b.center}, Checked:${b.isCheck})`;
+                        comparison = `Stats: User(Mat:${u.material}, Center:${u.center}) vs Best(Mat:${b.material}, Center:${b.center})`;
+                    }
+
+                    // Material Delta Injection
+                    if (isError && Math.abs(d.materialDelta) >= 1) {
+                         comparison += ` [CRITICAL: Best move wins +${d.materialDelta} more material than your move!]`;
                     }
 
                     let tacticInfo = d.tactic ? `[TACTIC: ${d.tactic}]` : '';
                     if (isMate) tacticInfo = "[GAME OVER: CHECKMATE]"; 
+                    
                     const bestLineInfo = isError ? `\n   -> Engine Best: ${d.bestMoveSan}\n   -> Engine Line: ${d.pvSan}` : '';
                     
                     log += `${moveInfo} ${stats} ${tacticInfo} ${comparison}${bestLineInfo}\nFEN: ${d.fenBefore}\n\n`;
@@ -1212,23 +1247,24 @@
             You are a Grandmaster Chess Coach.
             
             **TASK:**
-            Explain the moves in the provided game log.
+            Provide brief, insightful commentary on the provided chess game log.
+            
+            **TONE GUIDELINES:**
+            1. **Opening:** Be educational. Mention the opening goals.
+            2. **Midgame:** Be critical but encouraging. 
+            3. **Endgame:** - If the game is "Winning" or "Lost" (Eval > 3 or < -3), stop nitpicking small inaccuracies. Focus on the big picture. 
+               - Do NOT call a move a "Blunder" if the player is already winning by +10 or losing by -10, unless they throw away the win.
             
             **OUTPUT RULES (STRICT):**
-            1. **Conversational Tone:** Do NOT print tags like [DATA], [STATS], or [TACTIC] in your final output. Incorporate the information naturally into sentences.
-                - *Bad:* "[DATA] Center control +1. This is good."
-                - *Good:* "You did a great job fighting for the center here, which gives you more space than the engine's recommendation."
-            2. **Comparative Analysis:** When a move is a Mistake/Blunder, explicitly explain *what* was missed compared to the Best Move. 
-                - Did the user lose material? Say "This move drops a pawn."
-                - Did the user ignore development? Say "This is passive; developing the knight was more active."
-            3. **Opening Theory:** If a move is marked [Class: Book], acknowledge it as standard theory.
-            4. **Victory:** If [GAME OVER: CHECKMATE] appears, congratulate the user warmly.
+            1. **Natural Language:** Do NOT use tags like [DATA] or [Eval] in the final text.
+            2. **Accuracy:** Trust the [Eval] tag provided. If it says "White Winning", do NOT say the game is equal.
+            3. **Material:** If the log says [CRITICAL: Best move wins material], EXPLICITLY mention what piece was missed (e.g., "You missed a tactic to win a Knight").
 
             **JSON Format:**
             {
                 "12": {
-                    "analysis": "This pawn push is a bit loose. While it looks aggressive, it actually weakens your king's position. The engine preferred simple development with Nf3 to keep your structure solid.",
-                    "pv_explanation": ["Nf3 controls the center", "Be7 prepares castling"] 
+                    "analysis": "This push weakens the king. Better was Nf3 to develop.",
+                    "pv_explanation": ["Nf3 controls the center"] 
                 }
             }
 
@@ -1285,13 +1321,11 @@
                 const turn = move.color === 'w' ? "White" : "Black";
                 const dot = move.color === 'w' ? "." : "...";
 
-                // Eval formatting
                 let evalText = move.eval;
-                if (!evalText.startsWith('M') && !evalText.startsWith('-') && parseFloat(evalText) > 0) {
+                if (typeof evalText === 'string' && !evalText.startsWith('M') && !evalText.startsWith('-') && parseFloat(evalText) > 0) {
                     evalText = '+' + evalText;
                 }
 
-                // Win Chance
                 let winChance = "N/A";
                 if (move.wdl) {
                     winChance = (move.wdl[0] / 10).toFixed(1) + "%";
@@ -1323,4 +1357,3 @@
     </script>
 </body>
 </html>
-
