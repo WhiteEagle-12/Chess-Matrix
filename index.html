@@ -359,6 +359,7 @@
         let currentMoveIndex = -1; 
         let analysisData = []; 
         let geminiComments = {}; 
+        let gameStats = null;
         let isAnalyzing = false;
         let isHeatmapActive = false;
         
@@ -444,6 +445,7 @@
                     
                     analysisData = [];
                     geminiComments = {};
+                    gameStats = null;
                     stopInteractiveMode();
                     
                     updateUI();
@@ -666,8 +668,40 @@
             const bestMoveText = document.getElementById('bestMoveText');
 
             if (analysisData.length === 0 || currentMoveIndex === -1) {
+                // Check if we have Game Stats to show (Post-Analysis State)
+                if (gameStats) {
+                    contentDiv.classList.add('hidden');
+                    placeholder.classList.remove('hidden');
+                    box.className = 'coach-box p-4 rounded-r-lg shadow-sm flex flex-col justify-center border-l-8 border-indigo-500 bg-indigo-50';
+
+                    // Render Game Summary Card
+                    placeholder.innerHTML = `
+                        <div class="text-left w-full">
+                            <h3 class="font-bold text-indigo-800 border-b border-indigo-200 pb-1 mb-2">Game Summary</h3>
+                            <div class="grid grid-cols-2 gap-4 text-sm mb-2">
+                                <div>
+                                    <div class="text-xs text-gray-500 uppercase font-bold">Accuracy</div>
+                                    <div class="font-bold text-gray-800">${gameStats.accuracyLabel}</div>
+                                    <div class="text-xs text-gray-400">ACPL: ${gameStats.acpl}</div>
+                                </div>
+                                <div>
+                                    <div class="text-xs text-gray-500 uppercase font-bold">Style</div>
+                                    <div class="font-bold text-gray-800">${gameStats.styleLabel}</div>
+                                    <div class="text-xs text-gray-400">Complexity: ${gameStats.complexity}</div>
+                                </div>
+                            </div>
+                            <div class="text-xs text-indigo-600 bg-white p-2 rounded border border-indigo-100 italic">
+                                <i class="fa-solid fa-robot"></i> Use the arrows to review move-by-move.
+                            </div>
+                        </div>
+                    `;
+                    return;
+                }
+
+                // Default Start State
                 contentDiv.classList.add('hidden');
                 placeholder.classList.remove('hidden');
+                placeholder.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles text-2xl mb-2 text-indigo-500"></i><br>Game Loaded.<br>Click <b>Review</b> for AI Analysis.';
                 box.className = 'coach-box p-4 rounded-r-lg shadow-sm flex flex-col justify-center'; 
                 return;
             }
@@ -1068,10 +1102,69 @@
                 }
 
                 if (!isAnalyzing) return;
+
+                // =========================================================
+                // === NEW AGGREGATION BLOCK: Calculate Game Character ===
+                // =========================================================
+
+                let totalLoss = 0;
+                let scoredMoves = 0;
+                let complexitySum = 0;
+                let prevEval = 0;
+
+                // Define ACPL approximation values based on classification
+                const ACPL_MAP = {
+                    "Best": 0, "Excellent": 5, "Good": 20,
+                    "Inaccuracy": 60, "Mistake": 150, "Blunder": 350, "Neutral": 0, "Book": 0
+                };
+
+                analysisData.forEach(d => {
+                    // ACPL Calculation (Centipawn Loss approximation)
+                    totalLoss += ACPL_MAP[d.classification] || 0;
+
+                    // Complexity Calculation (Average Eval Swing)
+                    let currentEval = parseEvalToNumber(d.eval);
+                    // Clamp mate scores for complexity math (20.0 instead of 100.0)
+                    if (d.eval.toString().includes('M')) currentEval = d.eval.includes('-') ? -20 : 20;
+
+                    complexitySum += Math.abs(currentEval - prevEval);
+                    prevEval = currentEval;
+
+                    scoredMoves++;
+                });
+
+                const acpl = Math.round(totalLoss / (scoredMoves || 1));
+                const complexityScore = (complexitySum / (scoredMoves || 1)).toFixed(2);
+
+                // Generate the narrative tags for the prompt
+                let accuracyLabel = "Average";
+                if (acpl < 25) accuracyLabel = "Master-Level Precision";
+                else if (acpl < 50) accuracyLabel = "Strong Club Player";
+                else if (acpl > 100) accuracyLabel = "Erratic and Risky";
+
+                let gameTypeLabel = "Standard Fight";
+                if (complexityScore < 0.8) gameTypeLabel = "Positional Grind (Low Complexity)";
+                else if (complexityScore > 3.0) gameTypeLabel = "Wild Tactical Chaos (High Complexity)";
+
+                const gameSummary = `
+[GAME SUMMARY]
+- Player Accuracy: ${accuracyLabel} (ACPL: ${acpl})
+- Game Style: ${gameTypeLabel} (Complexity: ${complexityScore})
+- Overall Tip: Use this data to define the 'Tone' and 'Focus' of the entire report.
+`;
+
+                // Store stats for UI
+                gameStats = {
+                    acpl: acpl,
+                    accuracyLabel: accuracyLabel,
+                    complexity: complexityScore,
+                    styleLabel: gameTypeLabel
+                };
+
                 document.getElementById('statusTitle').innerText = "Consulting Coach...";
                 document.getElementById('geminiStatus').classList.remove('hidden');
                 document.getElementById('progressBar').className = "h-full bg-purple-500 animate-pulse";
-                await getGeminiCommentary(apiKey, document.getElementById('analysisFocus').value, openingName);
+                await getGeminiCommentary(apiKey, document.getElementById('analysisFocus').value, openingName, gameSummary);
 
             } catch (err) {
                 console.error(err);
@@ -1239,9 +1332,9 @@
             return s;
         }
 
-        // --- 10. GEMINI API (UPDATED PROMPT) ---
-        async function getGeminiCommentary(key, focus, opening) {
-            let log = "";
+        // --- 10. GEMINI API (UPDATED PROMPT with Game Summary Context) ---
+        async function getGeminiCommentary(key, focus, opening, gameSummary) {
+            let log = gameSummary; // Start the log with the overall game summary
             
             // 1. Compress Opening Book moves
             let bookLimit = 0;
@@ -1307,24 +1400,40 @@
                 }
             });
 
-            if (log.length < 50) log = "Game was short.";
+            if (log.length < 50) log = gameSummary + "\nGame was too short for detailed move analysis.";
 
             const prompt = `
             You are a Grandmaster Chess Coach.
             
             **TASK:**
             Provide brief, insightful commentary on the provided chess game log.
+
+            **TONE ADJUSTMENT (CRITICAL):**
+            The [GAME SUMMARY] contains the overall ACPL and Complexity. Use this to set the tone for your move comments:
             
-            **TONE GUIDELINES:**
-            1. **Opening:** Be educational. Mention the opening goals.
-            2. **Midgame:** Be critical but encouraging. 
-            3. **Endgame:** - If the game is "Winning" or "Lost" (Eval > 3 or < -3), stop nitpicking small inaccuracies. Focus on the big picture. 
-               - Do NOT call a move a "Blunder" if the player is already winning by +10 or losing by -10, unless they throw away the win.
+            1. **Master-Level Precision** -> Adopt persona: "The Encouraging Mentor".
+               - Be enthusiastic and supportive.
+               - Frame 'Inaccuracy' as minor technical oversights.
+               - Congratulate them on sharp play.
+
+            2. **Wild Tactical Chaos** -> Adopt persona: "The Safety Officer".
+               - Hyper-aware of defense and King Safety.
+               - Emphasize WHY a move avoided a trap.
+               - Use phrases like "in this minefield" or "navigated the tactics".
+
+            3. **Erratic and Risky** -> Adopt persona: "The Consistency Coach".
+               - Firm but patient.
+               - For Blunders, emphasize checking every line once more.
+               - For Good moves, highlight the value of simple, steady play.
+
+            **GENERAL GUIDELINES:**
+            - **Opening:** Be educational. Mention the opening goals.
+            - **Endgame:** If the game is "Winning" or "Lost" (Eval > 3 or < -3), stop nitpicking small inaccuracies.
             
             **OUTPUT RULES (STRICT):**
-            1. **Natural Language:** Do NOT use tags like [DATA] or [Eval] in the final text.
+            1. **Natural Language:** Do NOT use tags like [DATA], [Eval], or [GAME SUMMARY] in the final text.
             2. **Accuracy:** Trust the [Eval] tag provided. If it says "White Winning", do NOT say the game is equal.
-            3. **Material:** If the log says [CRITICAL: Best move wins material], EXPLICITLY mention what piece was missed (e.g., "You missed a tactic to win a Knight").
+            3. **Material:** If the log says [CRITICAL: Best move wins material], EXPLICITLY mention what piece was missed.
 
             **JSON Format:**
             {
