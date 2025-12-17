@@ -150,7 +150,12 @@
 
     <nav class="bg-indigo-700 text-white p-3 shadow-md sticky top-0 z-50">
         <div class="max-w-2xl mx-auto flex justify-between items-center">
-            <h1 class="font-bold text-lg"><i class="fa-solid fa-chess"></i> Chess Coach Pro</h1>
+            <div class="flex items-center gap-3">
+                <button onclick="toggleSidebar()" class="text-white hover:text-indigo-200 text-xl" title="Game Library">
+                    <i class="fa-solid fa-bars"></i>
+                </button>
+                <h1 class="font-bold text-lg"><i class="fa-solid fa-chess"></i> Chess Coach Pro</h1>
+            </div>
             <div class="flex gap-2">
                 <button onclick="toggleHeatmap()" class="text-white hover:text-indigo-200" title="Toggle Threat Map">
                     <i class="fa-solid fa-eye"></i>
@@ -165,7 +170,54 @@
         </div>
     </nav>
 
+    <!-- Sidebar -->
+    <div id="sidebarOverlay" onclick="toggleSidebar()" class="fixed inset-0 bg-black/50 z-[60] hidden transition-opacity"></div>
+    <div id="librarySidebar" class="fixed top-0 left-0 h-full w-64 bg-white shadow-2xl transform -translate-x-full transition-transform duration-300 z-[70] flex flex-col">
+        <div class="bg-indigo-700 text-white p-4 flex justify-between items-center">
+            <h2 class="font-bold text-lg"><i class="fa-solid fa-book-open"></i> Game Library</h2>
+            <button onclick="toggleSidebar()" class="text-indigo-200 hover:text-white"><i class="fa-solid fa-times text-xl"></i></button>
+        </div>
+        <div id="gameListContainer" class="flex-1 overflow-y-auto p-2 space-y-2 bg-gray-50">
+            <!-- Games injected here -->
+            <div class="text-center text-gray-400 mt-10 text-sm italic">No games saved yet.</div>
+        </div>
+    </div>
+
     <div class="max-w-2xl mx-auto p-4 flex flex-col gap-4">
+
+        <!-- Match Header (Profile Cards) -->
+        <div id="matchHeader" class="hidden flex flex-col gap-2 mb-2">
+            <div class="flex justify-between items-stretch gap-2">
+                <!-- White Card -->
+                <div class="flex-1 bg-white rounded-lg shadow-sm p-3 border-l-4 border-gray-400 flex flex-col items-center justify-center relative overflow-hidden">
+                    <div class="absolute top-0 left-0 w-full h-1 bg-gray-200"></div>
+                    <i id="whiteArchIcon" class="fa-solid fa-chess-pawn text-2xl text-gray-300 mb-1"></i>
+                    <div id="whiteAccuracy" class="text-2xl font-black text-gray-800">--%</div>
+                    <div id="whiteArchetype" class="text-[10px] uppercase font-bold text-gray-500 tracking-wider">Waiting...</div>
+                    <div class="absolute bottom-1 right-2 text-[10px] font-bold text-gray-300">WHITE</div>
+                </div>
+
+                <!-- Black Card -->
+                <div class="flex-1 bg-white rounded-lg shadow-sm p-3 border-r-4 border-black flex flex-col items-center justify-center relative overflow-hidden">
+                    <div class="absolute top-0 left-0 w-full h-1 bg-gray-800"></div>
+                    <i id="blackArchIcon" class="fa-solid fa-chess-pawn text-2xl text-gray-300 mb-1"></i>
+                    <div id="blackAccuracy" class="text-2xl font-black text-gray-800">--%</div>
+                    <div id="blackArchetype" class="text-[10px] uppercase font-bold text-gray-500 tracking-wider">Waiting...</div>
+                    <div class="absolute bottom-1 left-2 text-[10px] font-bold text-gray-400">BLACK</div>
+                </div>
+            </div>
+
+            <!-- Complexity Meter -->
+            <div class="bg-white rounded-full p-1 shadow-sm flex items-center gap-2">
+                <span class="text-[10px] font-bold text-gray-400 pl-2">CALM</span>
+                <div class="flex-1 h-3 bg-gray-200 rounded-full overflow-hidden relative">
+                    <div class="absolute inset-0 bg-gradient-to-r from-green-400 via-yellow-400 to-red-500 opacity-50"></div>
+                    <div id="complexityFill" class="h-full bg-gradient-to-r from-indigo-500 to-purple-600 shadow-[0_0_10px_rgba(99,102,241,0.5)] transition-all duration-1000" style="width: 0%"></div>
+                </div>
+                <span class="text-[10px] font-bold text-gray-400 pr-2">CHAOS</span>
+                <div id="complexityScore" class="bg-gray-800 text-white text-[10px] font-bold px-2 rounded-full">0.0</div>
+            </div>
+        </div>
 
         <div class="flex justify-between items-center bg-white p-3 rounded-lg shadow-sm">
             <div class="flex items-center gap-3">
@@ -1122,64 +1174,94 @@
                 // === NEW AGGREGATION BLOCK: Calculate Game Character ===
                 // =========================================================
 
-                let totalLoss = 0;
-                let scoredMoves = 0;
+                let whiteLoss = 0, whiteMoves = 0;
+                let blackLoss = 0, blackMoves = 0;
                 let complexitySum = 0;
                 let prevEval = 0;
 
-                // Define ACPL approximation values based on classification
                 const ACPL_MAP = {
                     "Best": 0, "Excellent": 5, "Good": 20,
                     "Inaccuracy": 60, "Mistake": 150, "Blunder": 350, "Neutral": 0, "Book": 0
                 };
 
                 analysisData.forEach(d => {
-                    // ACPL Calculation (Centipawn Loss approximation)
-                    totalLoss += ACPL_MAP[d.classification] || 0;
+                    // ACPL
+                    const loss = ACPL_MAP[d.classification] || 0;
+                    if (d.color === 'w') { whiteLoss += loss; whiteMoves++; }
+                    else { blackLoss += loss; blackMoves++; }
 
-                    // Complexity Calculation (Average Eval Swing)
+                    // Complexity
                     let currentEval = parseEvalToNumber(d.eval);
-                    // Clamp mate scores for complexity math (20.0 instead of 100.0)
                     if (d.eval.toString().includes('M')) currentEval = d.eval.includes('-') ? -20 : 20;
 
-                    complexitySum += Math.abs(currentEval - prevEval);
-                    prevEval = currentEval;
+                    // Normalize swing (cap at 4.0 per move to prevent single blunders skewing everything)
+                    let swing = Math.abs(currentEval - prevEval);
+                    if (swing > 4.0) swing = 4.0;
 
-                    scoredMoves++;
+                    complexitySum += swing;
+                    prevEval = currentEval;
                 });
 
-                const acpl = Math.round(totalLoss / (scoredMoves || 1));
-                const complexityScore = (complexitySum / (scoredMoves || 1)).toFixed(2);
+                const whiteAcpl = Math.round(whiteLoss / (whiteMoves || 1));
+                const blackAcpl = Math.round(blackLoss / (blackMoves || 1));
 
-                // Generate the narrative tags for the prompt
-                let accuracyLabel = "Average";
-                if (acpl < 25) accuracyLabel = "Master-Level Precision";
-                else if (acpl < 50) accuracyLabel = "Strong Club Player";
-                else if (acpl > 100) accuracyLabel = "Erratic and Risky";
+                // Scale complexity to 0-5 roughly
+                // Average swing of 0.5 is calm, 1.5 is sharp.
+                // (Sum / Moves) * 2.5 roughly maps 0-2 range to 0-5
+                let rawComp = complexitySum / (analysisData.length || 1);
+                let complexityScore = (rawComp * 2.5).toFixed(1);
+                if (complexityScore > 5.0) complexityScore = "5.0";
 
-                let gameTypeLabel = "Standard Fight";
-                if (complexityScore < 0.8) gameTypeLabel = "Positional Grind (Low Complexity)";
-                else if (complexityScore > 3.0) gameTypeLabel = "Wild Tactical Chaos (High Complexity)";
+                const whiteAcc = calculateAccuracy(whiteAcpl);
+                const blackAcc = calculateAccuracy(blackAcpl);
 
-                const gameSummary = `
-[GAME SUMMARY]
-- Player Accuracy: ${accuracyLabel} (ACPL: ${acpl})
-- Game Style: ${gameTypeLabel} (Complexity: ${complexityScore})
-- Overall Tip: Use this data to define the 'Tone' and 'Focus' of the entire report.
-`;
+                const whiteArch = getArchetype(whiteAcc, complexityScore);
+                const blackArch = getArchetype(blackAcc, complexityScore);
 
                 // Store stats for UI
                 gameStats = {
-                    acpl: acpl,
-                    accuracyLabel: accuracyLabel,
+                    white: { acpl: whiteAcpl, accuracy: whiteAcc, archetype: whiteArch },
+                    black: { acpl: blackAcpl, accuracy: blackAcc, archetype: blackArch },
                     complexity: complexityScore,
-                    styleLabel: gameTypeLabel
+                    // Legacy support for summary card (can be removed later if card is updated)
+                    accuracyLabel: whiteAcc + "% vs " + blackAcc + "%",
+                    acpl: whiteAcpl,
+                    styleLabel: complexityScore > 2.5 ? "Sharp" : "Positional"
                 };
+
+                // Generate ID and Save
+                const gameId = generateGameId(game.pgn());
+                const gameToSave = {
+                    id: gameId,
+                    pgn: game.pgn(),
+                    opening: openingName,
+                    date: new Date().toLocaleDateString(),
+                    analysisData: analysisData,
+                    gameStats: gameStats,
+                    geminiComments: {} // Placeholder
+                };
+                saveGameToLibrary(gameToSave);
+
+                // Update Header immediately
+                if (typeof updateMatchHeader === 'function') {
+                    updateMatchHeader(gameStats.white, gameStats.black, gameStats.complexity);
+                }
+
+                const gameSummary = `
+[GAME SUMMARY]
+- White: ${whiteArch.label} (${whiteAcc}% Accuracy, ${whiteAcpl} ACPL)
+- Black: ${blackArch.label} (${blackAcc}% Accuracy, ${blackAcpl} ACPL)
+- Complexity: ${complexityScore}/5.0
+`;
 
                 document.getElementById('statusTitle').innerText = "Consulting Coach...";
                 document.getElementById('geminiStatus').classList.remove('hidden');
                 document.getElementById('progressBar').className = "h-full bg-purple-500 animate-pulse";
                 await getGeminiCommentary(apiKey, document.getElementById('analysisFocus').value, openingName, gameSummary);
+
+                // Update saved game with comments
+                gameToSave.geminiComments = geminiComments;
+                saveGameToLibrary(gameToSave);
 
             } catch (err) {
                 console.error(err);
@@ -1256,6 +1338,152 @@
         }
 
         // --- 9. HELPERS ---
+        function toggleSidebar() {
+            const sidebar = document.getElementById('librarySidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+            const isClosed = sidebar.classList.contains('-translate-x-full');
+
+            if (isClosed) {
+                sidebar.classList.remove('-translate-x-full');
+                overlay.classList.remove('hidden');
+                renderGameList();
+            } else {
+                sidebar.classList.add('-translate-x-full');
+                overlay.classList.add('hidden');
+            }
+        }
+
+        function renderGameList() {
+            const list = JSON.parse(localStorage.getItem('chess_saved_games') || '[]');
+            const container = document.getElementById('gameListContainer');
+
+            if (list.length === 0) {
+                container.innerHTML = '<div class="text-center text-gray-400 mt-10 text-sm italic">No games saved yet.</div>';
+                return;
+            }
+
+            container.innerHTML = list.map(g => `
+                <div onclick="loadGameFromLibrary('${g.id}')" class="bg-white p-3 rounded shadow-sm border border-gray-200 hover:bg-indigo-50 cursor-pointer transition-colors relative group">
+                    <div class="text-xs text-gray-400 font-mono mb-1">${g.date}</div>
+                    <div class="font-bold text-gray-800 text-sm mb-1 truncate">${g.opening || 'Unknown Opening'}</div>
+                    <div class="flex justify-between items-center mt-2">
+                         <div class="text-[10px] font-bold px-2 py-1 rounded bg-gray-100 text-gray-600">
+                            CMPX: ${g.gameStats ? g.gameStats.complexity : '?'}
+                         </div>
+                         <i class="fa-solid fa-chevron-right text-gray-300"></i>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function calculateAccuracy(acpl) {
+            return Math.max(0, 100.0 - (2.0 * Math.sqrt(acpl))).toFixed(1);
+        }
+
+        function getArchetype(accuracy, complexity) {
+            const acc = parseFloat(accuracy);
+            const cplx = parseFloat(complexity);
+
+            if (acc > 85 && cplx < 1.5) return { label: "The Sniper", icon: "fa-crosshairs" };
+            if (acc < 75 && cplx > 2.5) return { label: "The Gambler", icon: "fa-dice" };
+            if (acc > 85 && cplx > 2.5) return { label: "The Grandmaster", icon: "fa-chess-king" };
+            if (acc < 75 && cplx < 1.5) return { label: "The Apprentice", icon: "fa-user-graduate" };
+            return { label: "The Club Player", icon: "fa-chess-pawn" }; // Default fallback
+        }
+
+        function generateGameId(pgn) {
+            let hash = 0;
+            if (pgn.length === 0) return hash;
+            for (let i = 0; i < pgn.length; i++) {
+                const char = pgn.charCodeAt(i);
+                hash = ((hash << 5) - hash) + char;
+                hash = hash & hash; // Convert to 32bit integer
+            }
+            return Math.abs(hash) + "_" + new Date().getTime();
+        }
+
+        function saveGameToLibrary(gameData) {
+            const STORAGE_KEY = 'chess_saved_games';
+            let library = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+
+            // Check for duplicate based on PGN hash (ignoring timestamp in ID)
+            // We'll use a simplified check: same PGN string usually means same game
+            const existingIndex = library.findIndex(g => g.pgn === gameData.pgn);
+
+            if (existingIndex !== -1) {
+                // Overwrite existing analysis
+                gameData.id = library[existingIndex].id; // Keep original ID
+                library[existingIndex] = gameData;
+            } else {
+                library.push(gameData);
+            }
+
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(library));
+            // Trigger UI update if sidebar is open (to be implemented)
+            if (typeof renderGameList === 'function') renderGameList();
+        }
+
+        function loadGameFromLibrary(id) {
+            const STORAGE_KEY = 'chess_saved_games';
+            let library = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+            const savedGame = library.find(g => g.id === id);
+
+            if (!savedGame) { alert("Game not found!"); return; }
+
+            // 1. Load PGN
+            try {
+                game.load_pgn(savedGame.pgn);
+                gameHistory = game.history({ verbose: true });
+                game.reset();
+                currentMoveIndex = -1;
+                board.position(game.fen());
+                board.orientation('white');
+            } catch (e) {
+                console.error("PGN Load Error", e);
+                return;
+            }
+
+            // 2. Restore Analysis Data
+            analysisData = savedGame.analysisData;
+            geminiComments = savedGame.geminiComments || {};
+            gameStats = savedGame.gameStats;
+
+            // 3. Update UI
+            stopInteractiveMode();
+            updateUI();
+
+            // 4. Update Header
+            updateMatchHeader(gameStats.white, gameStats.black, gameStats.complexity);
+
+            document.getElementById('gameStatus').innerText = "Analysis Loaded from Library.";
+            document.getElementById('openingName').innerText = savedGame.opening || "";
+
+            // Close Sidebar
+            const sidebar = document.getElementById('librarySidebar');
+            if(sidebar && !sidebar.classList.contains('-translate-x-full')) toggleSidebar();
+        }
+
+        function updateMatchHeader(white, black, complexity) {
+            const header = document.getElementById('matchHeader');
+            header.classList.remove('hidden');
+
+            // White
+            document.getElementById('whiteAccuracy').innerText = white.accuracy + '%';
+            document.getElementById('whiteArchetype').innerText = white.archetype.label;
+            document.getElementById('whiteArchIcon').className = `fa-solid ${white.archetype.icon} text-2xl text-indigo-500 mb-1`;
+
+            // Black
+            document.getElementById('blackAccuracy').innerText = black.accuracy + '%';
+            document.getElementById('blackArchetype').innerText = black.archetype.label;
+            document.getElementById('blackArchIcon').className = `fa-solid ${black.archetype.icon} text-2xl text-indigo-500 mb-1`;
+
+            // Complexity
+            // Map 0-5 to 0-100% width
+            const percentage = Math.min(100, (parseFloat(complexity) / 5.0) * 100);
+            document.getElementById('complexityFill').style.width = percentage + '%';
+            document.getElementById('complexityScore').innerText = complexity;
+        }
+
         function getDetailedMoveStats(gameObj, moveObj, oldFen) {
             const getMat = (fen) => {
                 let s = 0;
