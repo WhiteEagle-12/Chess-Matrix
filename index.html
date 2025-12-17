@@ -1078,26 +1078,19 @@
                     let bestGain = (move.color === 'w') ? (bestMaterial - startMaterial) : (startMaterial - bestMaterial);
 
                     // Check protection using the state AFTER the move
-                    const isProtected = isSquareProtected(tempGame, move.to, move.color);
+                    const isProtected = isSquareProtected(tempGame, move.to);
                     const isCapture = move.flags.includes('c') || move.captured;
 
                     let materialMsg = "";
 
-                    // 1. HUNG_PIECE: User lost material, Best move didn't, and the square is NOT protected
-                    if (userGain < 0 && bestGain >= 0 && !isProtected) {
-                        materialMsg = "HUNG_PIECE";
-                    }
-                    // 2. BAD_TRADE: User lost material, Best move didn't, but square IS protected
-                    else if (userGain < 0 && bestGain >= 0 && isProtected) {
-                        materialMsg = "BAD_TRADE";
-                    }
-                    // 3. TRADED_AWAY_ADVANTAGE: Equal trade (Gain=0) but classified as error
-                    else if (userGain === 0 && isCapture && (cls === "Mistake" || cls === "Blunder")) {
-                         materialMsg = "TRADED_AWAY_ADVANTAGE";
-                    }
-                    // 4. MISSED_WIN: Best move wins material, User didn't
-                    else if (bestGain > 0 && userGain <= 0 && Math.abs(bestGain - userGain) >= 1) {
+                    if (userGain < 0 && bestGain >= 0) {
+                        materialMsg = !isProtected ? "HUNG_PIECE" : "BAD_TRADE";
+                    } else if (userGain === 0 && (cls === "Mistake" || cls === "Blunder") && isCapture) {
+                        materialMsg = "TRADED_AWAY_ADVANTAGE";
+                    } else if (bestGain > 0 && userGain <= 0 && Math.abs(bestGain - userGain) >= 1) {
                         materialMsg = "MISSED_WIN";
+                    } else if ((cls === "Mistake" || cls === "Blunder") && userGain >= 0) {
+                        materialMsg = "POSITIONAL_BLUNDER";
                     }
 
                     const tacticAlert = isMate ? "Checkmate" : detectTactics(tempGame, move);
@@ -1328,14 +1321,29 @@
             try { return (await (await fetch(`https://tablebase.lichess.ovh/standard?fen=${fen}`)).json()).category; } catch(e){return null;}
         }
 
-        function isSquareProtected(gameObj, targetSq, movedColor) {
-            const ctrl = calculateControl(gameObj);
-            const idx = ['a8','b8','c8','d8','e8','f8','g8','h8','a7','b7','c7','d7','e7','f7','g7','h7','a6','b6','c6','d6','e6','f6','g6','h6','a5','b5','c5','d5','e5','f5','g5','h5','a4','b4','c4','d4','e4','f4','g4','h4','a3','b3','c3','d3','e3','f3','g3','h3','a2','b2','c2','d2','e2','f2','g2','h2','a1','b1','c1','d1','e1','f1','g1','h1'].indexOf(targetSq);
-            if (idx === -1) return false;
+        function isSquareProtected(gameObj, targetSq) {
+            const turn = gameObj.turn();
+            const movedColor = turn === 'w' ? 'b' : 'w';
 
-            if (movedColor === 'w') return ctrl[idx] > 0;
-            if (movedColor === 'b') return ctrl[idx] < 0;
-            return false;
+            // Clone game to avoid mutating the actual game state
+            const temp = new Chess(gameObj.fen());
+
+            // Remove the piece at target and replace with an OPPONENT piece
+            // This allows us to check if we can 'capture' it (i.e., defend it)
+            temp.remove(targetSq);
+            temp.put({ type: 'p', color: turn }, targetSq);
+
+            // Force turn to be the mover's turn so we can generate their moves
+            const tokens = temp.fen().split(' ');
+            tokens[1] = movedColor;
+            tokens[3] = '-';
+            const newFen = tokens.join(' ');
+
+            const temp2 = new Chess(newFen);
+            const moves = temp2.moves({verbose: true});
+
+            // Check if any move captures on targetSq
+            return moves.some(m => m.to === targetSq);
         }
 
         function detectTactics(g, m) {
@@ -1426,13 +1434,15 @@
 
                     // --- NEW CONTEXT INJECTION ---
                     if (d.materialStatus === "HUNG_PIECE") {
-                        comparison += ` [HUNG_PIECE: User left a piece completely undefended]`;
+                        comparison += ` [TACTICAL ERROR: Piece was left completely undefended]`;
                     } else if (d.materialStatus === "BAD_TRADE") {
-                        comparison += ` [BAD_TRADE: User initiated or allowed an exchange that lost material value]`;
+                        comparison += ` [EXCHANGE ERROR: Piece was defended but the trade lost material value]`;
                     } else if (d.materialStatus === "TRADED_AWAY_ADVANTAGE") {
-                        comparison += ` [STRATEGIC ERROR: Material is equal, but this exchange significantly worsened the position]`;
+                        comparison += ` [STRATEGIC ERROR: Material is equal but the trade simplified the game for the opponent]`;
+                    } else if (d.materialStatus === "POSITIONAL_BLUNDER") {
+                        comparison += ` [POSITIONAL ERROR: No material lost, but King safety or piece activity is collapsing]`;
                     } else if (d.materialStatus === "MISSED_WIN") {
-                        comparison += ` [MISSED TACTIC: User missed a chance to win material. Best move captures something.]`;
+                        comparison += ` [OPPORTUNITY: You missed a chance to win material or a free capture]`;
                     }
 
                     let tacticInfo = d.tactic ? `[TACTIC: ${d.tactic}]` : '';
@@ -1482,10 +1492,10 @@
             **OUTPUT RULES (STRICT):**
             1. **Natural Language:** Do NOT use tags like [DATA] or [BLUNDER] in the final text.
             2. **Material Handling:**
-               - **[HUNG_PIECE]**: Scold the player for leaving a piece completely undefended.
-               - **[BAD_TRADE]**: Explain that the piece was defended, but the swap resulted in a loss of material value (e.g., trading a Rook for a Knight).
-               - **[STRATEGIC ERROR]**: Do NOT mention 'free pieces' or 'hanging' material. Instead, focus on how the trade simplified the game for the opponent or ruined the player's coordination.
-               - **[MISSED TACTIC]**: Explain that they missed a free capture.
+               - **[HUNG_PIECE]**: Focus on 'oversight' and 'forgetting.' Use: "You left this piece hanging/undefended."
+               - **[BAD_TRADE]**: Focus on 'math' and 'value.' Use: "Losing exchange" or "Bad trade-off." Never say 'hanging.'
+               - **[TRADED_AWAY_ADVANTAGE]**: Focus on 'simplification.' Use: "Traded your best piece for their worst" or "Unnecessary trade that killed your momentum."
+               - **[POSITIONAL_BLUNDER]**: Focus on 'geometry' and 'safety.' Use: "King safety is failing" or "Your pieces have no coordination."
             3. **Accuracy:** Trust the [Eval] tag provided.
 
             **JSON Format:**
