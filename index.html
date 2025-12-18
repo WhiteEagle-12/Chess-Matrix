@@ -1507,21 +1507,18 @@
         };
 
         function liveAnalyzeCurrentPosition() {
-            // 1. Safety Checks: Don't run if analyzing a full game or engine isn't ready
             if (isAnalyzing || !stockfish) return;
 
             const fen = game.fen();
             const turn = game.turn();
 
-            // 2. Reset Engine for Live Analysis
             stockfish.postMessage('stop');
             stockfish.postMessage('position fen ' + fen);
-            stockfish.postMessage('go multipv 10'); // Ask for 10 lines
+            stockfish.postMessage('go multipv 10');
 
             let lastUpdate = 0;
             let liveLines = [];
 
-            // 3. Clean up old listeners to prevent memory leaks/duplicate updates
             if (window._currentLiveListener) {
                 stockfish.removeEventListener('message', window._currentLiveListener);
             }
@@ -1534,7 +1531,6 @@
 
                 const l = e.data;
 
-                // 4. Parse Engine Output
                 if (l.startsWith('info') && l.includes('multipv') && l.includes('score')) {
                     const matchPv = l.match(/multipv (\d+)/);
                     const matchScore = l.match(/score (cp|mate) (-?\d+)/);
@@ -1544,21 +1540,23 @@
                         let rawVal = parseInt(matchScore[2]);
                         let absScore = (fen.includes(' b ') ? -rawVal : rawVal);
 
-                        // Store the line data
                         liveLines[idx] = {
                             rawScore: absScore,
                             type: matchScore[1]
                         };
 
-                        // 5. THE FIX: Smart Throttling
+                        // --- UPDATED THROTTLE LOGIC ---
                         const now = Date.now();
-                        // Count how many valid lines we actually have
                         const validLineCount = liveLines.filter(line => line).length;
+                        const timeDelta = now - lastUpdate;
 
-                        // Only render if:
-                        // A. We have at least 4 lines (Prevents the "Black Bar" flash)
-                        // B. AND 1 second has passed since the last render (Prevents flickering)
-                        if (validLineCount >= 4 && (now - lastUpdate > 1000)) {
+                        // 1. Full Data (10 lines): Update fast (100ms) to show the complete picture ASAP.
+                        const isFullSet = validLineCount === 10;
+
+                        // 2. Partial Data (4+ lines): Update slower (200ms) to let lines accumulate.
+                        const isPartialSet = validLineCount >= 4;
+
+                        if ((isFullSet && timeDelta > 100) || (isPartialSet && timeDelta > 200)) {
                              const segs = calculateStabilitySegments(liveLines, turn);
                              renderStabilitySegments(segs);
                              lastUpdate = now;
@@ -1568,7 +1566,6 @@
             };
 
             window._currentLiveListener = liveListener;
-
             stockfish.addEventListener('message', liveListener);
         }
 
