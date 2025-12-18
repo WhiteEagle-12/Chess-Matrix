@@ -172,12 +172,12 @@
 
     <!-- Sidebar -->
     <div id="sidebarOverlay" onclick="toggleSidebar()" class="fixed inset-0 bg-black/50 z-[60] hidden transition-opacity"></div>
-    <div id="librarySidebar" class="fixed top-0 left-0 h-full w-64 bg-white shadow-2xl transform -translate-x-full transition-transform duration-300 z-[70] flex flex-col">
-        <div class="bg-indigo-700 text-white p-4 flex justify-between items-center">
-            <h2 class="font-bold text-lg"><i class="fa-solid fa-book-open"></i> Game Library</h2>
-            <button onclick="toggleSidebar()" class="text-indigo-200 hover:text-white"><i class="fa-solid fa-times text-xl"></i></button>
+    <div id="librarySidebar" class="fixed top-0 left-0 h-full w-72 bg-white shadow-2xl transform -translate-x-full transition-transform duration-300 z-[70] flex flex-col">
+        <div class="bg-indigo-700 text-white p-4 flex justify-between items-center shadow-md">
+            <h2 class="font-bold text-lg flex items-center gap-2"><i class="fa-solid fa-book-open"></i> Game Library</h2>
+            <button onclick="toggleSidebar()" class="text-indigo-200 hover:text-white transition-colors"><i class="fa-solid fa-times text-xl"></i></button>
         </div>
-        <div id="gameListContainer" class="flex-1 overflow-y-auto p-2 space-y-2 bg-gray-50">
+        <div id="gameListContainer" class="flex-1 overflow-y-auto p-2 space-y-2 bg-gray-100">
             <!-- Games injected here -->
             <div class="text-center text-gray-400 mt-10 text-sm italic">No games saved yet.</div>
         </div>
@@ -208,13 +208,14 @@
             </div>
 
             <!-- Complexity Meter -->
-            <div class="bg-white rounded-full p-1 shadow-sm flex items-center gap-2">
-                <span class="text-[10px] font-bold text-gray-400 pl-2">CALM</span>
+            <div class="bg-white rounded-full p-1 shadow-sm flex items-center gap-2 border border-gray-100">
+                <span class="text-[10px] font-bold text-green-600 pl-2">CALM</span>
                 <div class="flex-1 h-3 bg-gray-200 rounded-full overflow-hidden relative">
-                    <div class="absolute inset-0 bg-gradient-to-r from-green-400 via-yellow-400 to-red-500 opacity-50"></div>
-                    <div id="complexityFill" class="h-full bg-gradient-to-r from-indigo-500 to-purple-600 shadow-[0_0_10px_rgba(99,102,241,0.5)] transition-all duration-1000" style="width: 0%"></div>
+                    <!-- Background Gradient: Green -> Indigo -> Purple -> Red -->
+                    <div class="absolute inset-0 bg-gradient-to-r from-green-400 via-indigo-400 via-purple-500 to-red-500 opacity-20"></div>
+                    <div id="complexityFill" class="h-full bg-gradient-to-r from-green-500 via-indigo-500 via-purple-600 to-red-600 shadow-[0_0_10px_rgba(99,102,241,0.3)] transition-all duration-1000" style="width: 0%"></div>
                 </div>
-                <span class="text-[10px] font-bold text-gray-400 pr-2">CHAOS</span>
+                <span class="text-[10px] font-bold text-red-500 pr-2">CHAOS</span>
                 <div id="complexityScore" class="bg-gray-800 text-white text-[10px] font-bold px-2 rounded-full">0.0</div>
             </div>
         </div>
@@ -1176,6 +1177,7 @@
 
                 let whiteLoss = 0, whiteMoves = 0;
                 let blackLoss = 0, blackMoves = 0;
+                let whiteBlunders = 0, blackBlunders = 0;
                 let complexitySum = 0;
                 let prevEval = 0;
 
@@ -1187,8 +1189,15 @@
                 analysisData.forEach(d => {
                     // ACPL
                     const loss = ACPL_MAP[d.classification] || 0;
-                    if (d.color === 'w') { whiteLoss += loss; whiteMoves++; }
-                    else { blackLoss += loss; blackMoves++; }
+                    if (d.color === 'w') {
+                        whiteLoss += loss;
+                        whiteMoves++;
+                        if (d.classification === 'Blunder') whiteBlunders++;
+                    } else {
+                        blackLoss += loss;
+                        blackMoves++;
+                        if (d.classification === 'Blunder') blackBlunders++;
+                    }
 
                     // Complexity
                     let currentEval = parseEvalToNumber(d.eval);
@@ -1215,8 +1224,8 @@
                 const whiteAcc = calculateAccuracy(whiteAcpl);
                 const blackAcc = calculateAccuracy(blackAcpl);
 
-                const whiteArch = getArchetype(whiteAcc, complexityScore);
-                const blackArch = getArchetype(blackAcc, complexityScore);
+                const whiteArch = getArchetype(whiteAcc, complexityScore, whiteBlunders);
+                const blackArch = getArchetype(blackAcc, complexityScore, blackBlunders);
 
                 // Store stats for UI
                 gameStats = {
@@ -1229,10 +1238,8 @@
                     styleLabel: complexityScore > 2.5 ? "Sharp" : "Positional"
                 };
 
-                // Generate ID and Save
-                const gameId = generateGameId(game.pgn());
+                // Generate and Save (ID handled by saveGameToLibrary)
                 const gameToSave = {
-                    id: gameId,
                     pgn: game.pgn(),
                     opening: openingName,
                     date: new Date().toLocaleDateString(),
@@ -1354,7 +1361,7 @@
         }
 
         function renderGameList() {
-            const list = JSON.parse(localStorage.getItem('chess_saved_games') || '[]');
+            const list = JSON.parse(localStorage.getItem('chess_coach_library') || '[]');
             const container = document.getElementById('gameListContainer');
 
             if (list.length === 0) {
@@ -1362,69 +1369,100 @@
                 return;
             }
 
-            container.innerHTML = list.map(g => `
-                <div onclick="loadGameFromLibrary('${g.id}')" class="bg-white p-3 rounded shadow-sm border border-gray-200 hover:bg-indigo-50 cursor-pointer transition-colors relative group">
-                    <div class="text-xs text-gray-400 font-mono mb-1">${g.date}</div>
-                    <div class="font-bold text-gray-800 text-sm mb-1 truncate">${g.opening || 'Unknown Opening'}</div>
-                    <div class="flex justify-between items-center mt-2">
-                         <div class="text-[10px] font-bold px-2 py-1 rounded bg-gray-100 text-gray-600">
-                            CMPX: ${g.gameStats ? g.gameStats.complexity : '?'}
+            // Reverse to show newest first
+            container.innerHTML = [...list].reverse().map(g => {
+                let resultBadge = '';
+                if (g.gameStats && g.analysisData && g.analysisData.length > 0) {
+                    const last = g.analysisData[g.analysisData.length - 1];
+                    let score = "½-½";
+                    let colorClass = "bg-gray-400";
+
+                    if (last.isMate || last.eval.toString().startsWith('M') || parseFloat(last.eval) > 10 || parseFloat(last.eval) < -10) {
+                         const evalNum = typeof last.eval === 'string' && last.eval.startsWith('M') ? (last.eval.includes('-') ? -100 : 100) : parseFloat(last.eval);
+                         if (evalNum > 0) { score = "1-0"; colorClass = "bg-green-500"; }
+                         else { score = "0-1"; colorClass = "bg-red-500"; }
+                    }
+                    resultBadge = `<div class="flex items-center gap-1 text-[10px] font-bold text-gray-600 bg-gray-100 px-2 py-1 rounded border border-gray-200">
+                        ${score} <span class="w-2 h-2 rounded-full ${colorClass}"></span>
+                    </div>`;
+                }
+
+                return `
+                <div onclick="loadGameFromLibrary('${g.id}')" class="bg-white p-3 rounded-lg shadow-sm border border-gray-200 hover:border-indigo-300 hover:shadow-md cursor-pointer transition-all relative group">
+                    <div class="flex justify-between items-start mb-1">
+                        <div class="text-[10px] text-gray-400 font-mono uppercase tracking-wide">${g.date}</div>
+                        ${resultBadge}
+                    </div>
+                    <div class="font-bold text-gray-800 text-sm mb-2 truncate leading-tight">${g.opening || 'Unknown Opening'}</div>
+                    <div class="flex justify-between items-center border-t border-gray-100 pt-2">
+                         <div class="text-[10px] font-bold px-2 py-1 rounded bg-purple-50 text-purple-700 border border-purple-100">
+                            Chaos: ${g.gameStats ? g.gameStats.complexity : '?'}
                          </div>
-                         <i class="fa-solid fa-chevron-right text-gray-300"></i>
+                         <div class="text-indigo-400 group-hover:text-indigo-600 transition-colors"><i class="fa-solid fa-chevron-right text-xs"></i></div>
                     </div>
                 </div>
-            `).join('');
+            `;
+            }).join('');
         }
 
         function calculateAccuracy(acpl) {
             return Math.max(0, 100.0 - (2.0 * Math.sqrt(acpl))).toFixed(1);
         }
 
-        function getArchetype(accuracy, complexity) {
+        function getArchetype(accuracy, complexity, blunderCount) {
             const acc = parseFloat(accuracy);
             const cplx = parseFloat(complexity);
+            const blunders = parseInt(blunderCount);
 
-            if (acc > 85 && cplx < 1.5) return { label: "The Sniper", icon: "fa-crosshairs" };
-            if (acc < 75 && cplx > 2.5) return { label: "The Gambler", icon: "fa-dice" };
-            if (acc > 85 && cplx > 2.5) return { label: "The Grandmaster", icon: "fa-chess-king" };
-            if (acc < 75 && cplx < 1.5) return { label: "The Apprentice", icon: "fa-user-graduate" };
-            return { label: "The Club Player", icon: "fa-chess-pawn" }; // Default fallback
+            if (acc > 95) return { label: "The Engine", icon: "fa-microchip" };
+            if (acc >= 90 && acc <= 95 && blunders === 0) return { label: "The Grandmaster", icon: "fa-chess-king" };
+            if (acc > 85 && cplx > 3.0) return { label: "The Magician", icon: "fa-wand-magic-sparkles" };
+            if (acc >= 80 && acc <= 90 && cplx < 1.5) return { label: "The Solid Pro", icon: "fa-shield-halved" };
+            if (acc < 70 && cplx > 3.0) return { label: "The Gambler", icon: "fa-dice" };
+            if (acc < 70) return { label: "The Student", icon: "fa-user-graduate" };
+
+            return { label: "The Club Player", icon: "fa-users" };
         }
 
-        function generateGameId(pgn) {
+        function getPgnHash(pgn) {
             let hash = 0;
-            if (pgn.length === 0) return hash;
-            for (let i = 0; i < pgn.length; i++) {
-                const char = pgn.charCodeAt(i);
+            const cleanPgn = pgn.replace(/\s+/g, ' ').trim();
+            if (cleanPgn.length === 0) return hash;
+            for (let i = 0; i < cleanPgn.length; i++) {
+                const char = cleanPgn.charCodeAt(i);
                 hash = ((hash << 5) - hash) + char;
-                hash = hash & hash; // Convert to 32bit integer
+                hash = hash & hash;
             }
-            return Math.abs(hash) + "_" + new Date().getTime();
+            return Math.abs(hash).toString(16);
         }
 
         function saveGameToLibrary(gameData) {
-            const STORAGE_KEY = 'chess_saved_games';
+            const STORAGE_KEY = 'chess_coach_library';
             let library = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
 
-            // Check for duplicate based on PGN hash (ignoring timestamp in ID)
-            // We'll use a simplified check: same PGN string usually means same game
-            const existingIndex = library.findIndex(g => g.pgn === gameData.pgn);
+            const currentHash = getPgnHash(gameData.pgn);
+            const existingIndex = library.findIndex(g => getPgnHash(g.pgn) === currentHash);
 
             if (existingIndex !== -1) {
-                // Overwrite existing analysis
-                gameData.id = library[existingIndex].id; // Keep original ID
-                library[existingIndex] = gameData;
+                // Overwrite existing analysis but preserve ID and Date
+                const existing = library[existingIndex];
+                library[existingIndex] = {
+                    ...gameData,
+                    id: existing.id,
+                    date: existing.date // Preserve original date
+                };
             } else {
+                // Create new
+                gameData.id = currentHash + "_" + new Date().getTime();
                 library.push(gameData);
             }
 
             localStorage.setItem(STORAGE_KEY, JSON.stringify(library));
-            // Trigger UI update if sidebar is open (to be implemented)
             if (typeof renderGameList === 'function') renderGameList();
         }
 
         function loadGameFromLibrary(id) {
-            const STORAGE_KEY = 'chess_saved_games';
+            const STORAGE_KEY = 'chess_coach_library';
             let library = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
             const savedGame = library.find(g => g.id === id);
 
@@ -1452,11 +1490,18 @@
             stopInteractiveMode();
             updateUI();
 
-            // 4. Update Header
-            updateMatchHeader(gameStats.white, gameStats.black, gameStats.complexity);
+            // 4. Update Header (INSTANTLY)
+            if (gameStats) {
+                updateMatchHeader(gameStats.white, gameStats.black, gameStats.complexity);
+            }
 
-            document.getElementById('gameStatus').innerText = "Analysis Loaded from Library.";
+            // 5. Populate Coach Box with Summary immediately
+            document.getElementById('gameStatus').innerText = "Analysis Loaded.";
             document.getElementById('openingName').innerText = savedGame.opening || "";
+
+            // Force coach box update to show summary
+            currentMoveIndex = -1;
+            updateCoachBox();
 
             // Close Sidebar
             const sidebar = document.getElementById('librarySidebar');
