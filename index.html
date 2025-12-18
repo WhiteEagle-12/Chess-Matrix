@@ -63,18 +63,32 @@
             background-color: #374151;
             border-radius: 4px;
             overflow: hidden;
-            margin-right: 4px;
+            margin-left: 4px;
             display: flex;
             flex-direction: column-reverse;
             gap: 1px;
             padding: 1px;
             box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
             z-index: 5;
+            position: relative;
         }
         .stability-segment {
             flex: 1;
             width: 100%;
             border-radius: 1px;
+            transition: background-color 0.3s;
+        }
+        .turn-indicator-dot {
+            position: absolute;
+            top: -6px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            border: 1px solid #666;
+            z-index: 20;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.5);
             transition: background-color 0.3s;
         }
         .stab-green { background-color: #22c55e; }
@@ -261,11 +275,13 @@
         </div>
 
         <div class="relative board-container">
-            <div id="stabilityBar" class="stability-bar-container"></div>
             <div class="eval-bar-container">
                 <div class="eval-score-text" id="evalBarTextTop"></div>
                 <div id="visualEvalBar" class="eval-bar-fill" style="height: 50%;"></div>
                 <div class="eval-score-text bottom" id="evalBarTextBottom"></div>
+            </div>
+            <div id="stabilityBar" class="stability-bar-container">
+                <div id="turnIndicatorIcon" class="turn-indicator-dot bg-white"></div>
             </div>
 
             <div id="board" class="relative transition-shadow duration-300"></div>
@@ -442,6 +458,7 @@
         let gameStats = null;
         let isAnalyzing = false;
         let isHeatmapActive = false;
+        let liveAnalysisDebounce = null;
         
         let interactiveState = {
             mode: 'none', 
@@ -571,14 +588,47 @@
         function updateStabilityBar() {
             const container = document.getElementById('stabilityBar');
             if (!container) return;
-            container.innerHTML = '';
 
-            let segments = Array(10).fill('empty');
-
-            if (currentMoveIndex >= 0 && analysisData[currentMoveIndex]) {
-                const data = analysisData[currentMoveIndex];
-                if (data.stability) segments = data.stability;
+            // 1. Perspective Management
+            const turn = game.turn(); // 'w' or 'b'
+            const indicator = document.getElementById('turnIndicatorIcon');
+            if(indicator) {
+                indicator.className = `turn-indicator-dot ${turn === 'w' ? 'bg-white' : 'bg-black'}`;
             }
+
+            // 2. Hybrid Data Retrieval
+            let segments = null;
+
+            if (currentMoveIndex === -1) {
+                // Start of game (White to move) -> Use Move 1's pre-stability if available
+                if (analysisData.length > 0 && analysisData[0]) segments = analysisData[0].stability;
+            } else if (currentMoveIndex < analysisData.length - 1) {
+                // Mid-game -> Use Next Move's pre-stability
+                if (analysisData[currentMoveIndex + 1]) segments = analysisData[currentMoveIndex + 1].stability;
+            } else if (currentMoveIndex === analysisData.length - 1) {
+                // Last played move -> We might have stored 'postMoveStability' in the last record?
+                // If not, we rely on Live Analysis.
+                if (analysisData[currentMoveIndex] && analysisData[currentMoveIndex].postMoveStability) {
+                    segments = analysisData[currentMoveIndex].postMoveStability;
+                }
+            }
+
+            // 3. Render Batch Data (Instant) or Placeholder
+            renderStabilitySegments(segments || Array(10).fill('empty'));
+
+            // 4. Trigger Live Analysis (Refinement)
+            if (!isAnalyzing) {
+                if (liveAnalysisDebounce) clearTimeout(liveAnalysisDebounce);
+                liveAnalysisDebounce = setTimeout(liveAnalyzeCurrentPosition, 300);
+            }
+        }
+
+        function renderStabilitySegments(segments) {
+            const container = document.getElementById('stabilityBar');
+            // Keep the indicator
+            const indicator = document.getElementById('turnIndicatorIcon');
+            container.innerHTML = '';
+            if(indicator) container.appendChild(indicator);
 
             segments.forEach(color => {
                 const div = document.createElement('div');
@@ -1055,58 +1105,14 @@
                     
                     // --- STABILITY & CRITICAL MOMENT LOGIC ---
                     let isCritical = false;
-                    let stabilityData = [];
+                    let stabilityData = calculateStabilitySegments(preMoveResult.lines, tempGame.turn());
 
-                    // Helper to get numeric score for gap calculation (handle Mate)
-                    const getGapScore = (line) => {
-                        if (line.type === 'mate') {
-                            // +/- 10000 for mate
-                            return (line.rawScore > 0) ? 10000 : -10000;
-                        }
-                        return line.rawScore; // Centipawns
-                    };
-
-                    if (preMoveResult.lines && preMoveResult.lines.length > 0) {
-                        // 1. Calculate Criticality (Hero Moment)
-                        if (preMoveResult.lines.length >= 2) {
-                            const l1 = preMoveResult.lines[0];
-                            const l2 = preMoveResult.lines[1];
-                            const s1 = getGapScore(l1);
-                            const s2 = getGapScore(l2);
-                            if (Math.abs(s1 - s2) > 150) isCritical = true;
-                        }
-
-                        // 2. Calculate Stability Segments
-                        const bestLine = preMoveResult.lines[0];
-                        const bestScore = getGapScore(bestLine);
-
-                        // We need 10 segments total
-                        for(let k=0; k<10; k++) {
-                            if (k < preMoveResult.lines.length) {
-                                const line = preMoveResult.lines[k];
-                                const currentScore = getGapScore(line);
-                                // Calculate distance in Centipawns (converted to pawns for logic)
-                                // Note: scores are absolute (white positive, black negative).
-                                // We need "Difference from Best".
-                                // If White to move, Best is Max. Diff = Best - Current.
-                                // If Black to move, Best is Min. Diff = Current - Best (or Abs(Best - Current)).
-
-                                const turn = tempGame.turn();
-                                const diffCp = (turn === 'w') ? (bestScore - currentScore) : (currentScore - bestScore);
-                                const diff = Math.max(0, diffCp / 100.0); // Convert to pawns
-
-                                let color = "red";
-                                if (diff < 0.5) color = "green";
-                                else if (diff <= 2.0) color = "yellow";
-
-                                stabilityData.push(color);
-                            } else {
-                                stabilityData.push("empty"); // Fewer than 10 legal moves
-                            }
-                        }
-                    } else {
-                        // Fallback if no lines
-                        stabilityData = Array(10).fill("empty");
+                    if (preMoveResult.lines && preMoveResult.lines.length >= 2) {
+                        const l1 = preMoveResult.lines[0];
+                        const l2 = preMoveResult.lines[1];
+                        const s1 = getGapScore(l1);
+                        const s2 = getGapScore(l2);
+                        if (Math.abs(s1 - s2) > 150) isCritical = true;
                     }
 
                     // Handle Tablebase "Truth"
@@ -1140,10 +1146,12 @@
                     const isDraw = tempGame.in_draw() || tempGame.in_stalemate();
                     let scoreAfter = 0;
                     let evAfterStr = "";
+                    let postMoveStability = Array(10).fill('empty');
                     
                     if (isMate) {
                         scoreAfter = (move.color === 'w') ? 100 : -100;
                         evAfterStr = "M0"; 
+                        postMoveStability = Array(10).fill('red');
                     } else if (isDraw) {
                         scoreAfter = 0;
                         evAfterStr = "0.00";
@@ -1151,6 +1159,7 @@
                         const postMoveResult = await runStockfish(fenAfter);
                         evAfterStr = postMoveResult.eval;
                         scoreAfter = parseEvalToNumber(postMoveResult.eval);
+                        postMoveStability = calculateStabilitySegments(postMoveResult.lines, tempGame.turn());
                     }
 
                     // --- CLASSIFICATION LOGIC FIXES ---
@@ -1243,6 +1252,7 @@
                         isMate: isMate,
                         isCritical: isCritical,
                         stability: stabilityData,
+                        postMoveStability: postMoveStability,
                         stats: { user: userMoveStats, best: bestMoveStats },
                         materialStatus: materialMsg
                     });
@@ -1430,6 +1440,124 @@
                 };
                 stockfish.addEventListener('message', list);
             });
+        }
+
+        // --- STABILITY MATH HELPER ---
+        function calculateStabilitySegments(lines, turn) {
+            // lines: Array of { rawScore: number, type: 'cp'|'mate', ... }
+            // turn: 'w' or 'b'
+
+            if (!lines || lines.length === 0) return Array(10).fill('empty');
+
+            const getScore = (l) => {
+                if (l.type === 'mate') {
+                    // Normalize Mate to +/- 10000.
+                    return l.rawScore > 0 ? 10000 : -10000;
+                }
+                return l.rawScore; // Centipawns
+            };
+
+            // Find the Best Score among lines
+            let bestScore = getScore(lines[0]);
+            for(let l of lines) {
+                const s = getScore(l);
+                if (turn === 'w') { if(s > bestScore) bestScore = s; }
+                else { if(s < bestScore) bestScore = s; }
+            }
+
+            let segments = [];
+
+            for(let i=0; i<10; i++) {
+                if (i < lines.length) {
+                    const l = lines[i];
+                    const s = getScore(l);
+
+                    // Calculate "Distance from Best"
+                    // If White: Diff = Best - Move. (e.g. 500 - 450 = 50).
+                    // If Black: Diff = Move - Best. (e.g. -450 - (-500) = 50).
+                    let diffCp = (turn === 'w') ? (bestScore - s) : (s - bestScore);
+
+                    if (diffCp < 0) diffCp = 0;
+
+                    const diffPawns = diffCp / 100.0;
+
+                    if (diffPawns < 0.5) segments.push('green');
+                    else if (diffPawns <= 2.0) segments.push('yellow');
+                    else segments.push('red');
+                } else {
+                    segments.push('empty');
+                }
+            }
+            return segments;
+        }
+
+        // --- LIVE ANALYSIS HELPER ---
+        const getGapScore = (line) => {
+            if (line.type === 'mate') return line.rawScore > 0 ? 10000 : -10000;
+            return line.rawScore;
+        };
+
+        function liveAnalyzeCurrentPosition() {
+            if (isAnalyzing || !stockfish) return;
+
+            const fen = game.fen();
+            const turn = game.turn();
+
+            stockfish.postMessage('stop');
+            stockfish.postMessage('position fen ' + fen);
+            stockfish.postMessage('go multipv 10');
+
+            // Temporary override for live updates
+            const originalOnMessage = stockfish.onmessage;
+            let liveLines = [];
+
+            // We need to restore the original listener if user navigates away or starts review
+            // For now, we just hook into the existing listener if possible,
+            // but since runStockfish adds its own, we need to be careful.
+            // runStockfish adds listener and removes it on finish.
+            // So we can safely add a persistent listener for live analysis here?
+            // Actually, stockfish.js usually supports one onmessage.
+
+            // Let's use addEventListener instead of onmessage property to avoid conflict
+            const liveListener = (e) => {
+                // If isAnalyzing became true, stop listening
+                if (isAnalyzing) {
+                    stockfish.removeEventListener('message', liveListener);
+                    return;
+                }
+
+                const l = e.data;
+
+                if (l.startsWith('info') && l.includes('multipv') && l.includes('score')) {
+                    const matchPv = l.match(/multipv (\d+)/);
+                    const matchScore = l.match(/score (cp|mate) (-?\d+)/);
+
+                    if (matchPv && matchScore) {
+                        const idx = parseInt(matchPv[1]) - 1;
+                        let rawVal = parseInt(matchScore[2]);
+                        let absScore = (fen.includes(' b ') ? -rawVal : rawVal);
+
+                        liveLines[idx] = {
+                            rawScore: absScore,
+                            type: matchScore[1]
+                        };
+
+                        if (liveLines.length > 0) {
+                             const segs = calculateStabilitySegments(liveLines, turn);
+                             renderStabilitySegments(segs);
+                        }
+                    }
+                }
+            };
+            stockfish.addEventListener('message', liveListener);
+
+            // Clean up previous listener if we stored it?
+            // Since we use addEventListener, we might accumulate listeners if we call this often.
+            // We should ideally remove the previous one.
+            if (window._currentLiveListener) {
+                stockfish.removeEventListener('message', window._currentLiveListener);
+            }
+            window._currentLiveListener = liveListener;
         }
 
         // --- 9. HELPERS ---
@@ -1796,12 +1924,15 @@
                     if (scoreNum < -3.0) stateLabel = "Black Winning";
                     if (d.eval.toString().includes("M")) stateLabel = "Forced Mate Detected";
 
-                    // Calculate Stability Count
-                    let stabilityCount = 0;
-                    if (d.stability) {
-                        stabilityCount = d.stability.filter(s => s === 'green').length;
-                    }
-                    const stats = `[Eval: ${d.eval} (${stateLabel})] [Class: ${d.classification}] [Stability: ${stabilityCount}/10]`;
+                    // Calculate Stability Shift
+                    let stabBefore = 0;
+                    if (d.stability) stabBefore = d.stability.filter(s => s === 'green').length;
+
+                    // Post-move stability (the pressure inflicted on opponent)
+                    let stabAfter = 0;
+                    if (d.postMoveStability) stabAfter = d.postMoveStability.filter(s => s === 'green').length;
+
+                    const stats = `[Eval: ${d.eval} (${stateLabel})] [Class: ${d.classification}] [My Stability: ${stabBefore}/10] [Opponent Stability After: ${stabAfter}/10]`;
                     
                     let comparison = "";
                     if (d.stats && d.stats.best) {
@@ -1867,13 +1998,23 @@
             - **Opening:** Be educational. Mention the opening goals.
             - **Endgame:** If the game is "Winning" or "Lost" (Eval > 3 or < -3), stop nitpicking small inaccuracies.
             
-            **STABILITY CONTEXT (NEW):**
-            Each move includes a [Stability: X/10] tag, representing the number of "safe" alternative moves.
-            - **Fragile Position (Stability <= 2):**
-              - If Eval is near 0.00: Use vocabulary like "Walking a tightrope," "One wrong step and it collapses," "High-stakes precision needed."
-              - If User is Winning (> +3): Warning! "Don't get complacent," "The position is sharper than it looks," "One slip gives it away."
-            - **Solid Position (Stability >= 7):** Position is robust. "Plenty of good options," "Flexible structure."
-            - **Archetype Focus:** "The Magician" loves low stability (Chaos). "The Solid Pro" hates it. Adjust your voice accordingly.
+            **STABILITY CONTEXT (NEW - PRESSURE SHIFT):**
+            Each move includes [My Stability: X/10] (User's options before moving) and [Opponent Stability After: Y/10] (Opponent's options after the move).
+
+            **Use this to narrate the flow of pressure:**
+            1. **The "Minefield" Move (High Impact):**
+               - If [My Stability] was High/Medium, but [Opponent Stability After] is Low (0-2).
+               - *Narrative:* "You threw them into a minefield!" "Brilliant squeeze—Black has nowhere to run."
+
+            2. **The "Escape" (Survival):**
+               - If [My Stability] was Low (0-2) and you found a Best/Excellent move.
+               - *Narrative:* "You were walking a tightrope, but you found the only path to stay alive."
+
+            3. **The "Blunder" (Self-Destruct):**
+               - If you played a Mistake/Blunder and [Opponent Stability After] jumps up (becomes easier for them).
+               - *Narrative:* "You let the pressure off. Now they have easy choices."
+
+            **Archetype Focus:** "The Magician" loves creating Low Stability for the opponent (Chaos). "The Solid Pro" hates Low Stability for themselves.
 
             **OUTPUT RULES (STRICT):**
             1. **Context, Not Labels:** Do NOT repeat the technical tags (like 'win material or a free capture') verbatim in the response. Use them as the *reason* for your advice.
