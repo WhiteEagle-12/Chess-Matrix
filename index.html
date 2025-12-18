@@ -62,7 +62,7 @@
             width: 14px;
             background-color: #374151;
             border-radius: 4px;
-            overflow: hidden;
+            overflow: visible; /* Modified to allow indicator to sit on top */
             margin-left: 4px;
             display: flex;
             flex-direction: column-reverse;
@@ -80,21 +80,21 @@
         }
         .turn-indicator-dot {
             position: absolute;
-            top: -6px;
+            top: -8px; /* Lifted up slightly */
             left: 50%;
             transform: translateX(-50%);
-            width: 8px;
-            height: 8px;
+            width: 10px; /* Slightly larger */
+            height: 10px;
             border-radius: 50%;
-            border: 1px solid #666;
+            /* Border and Bg set by JS */
             z-index: 20;
             box-shadow: 0 1px 2px rgba(0,0,0,0.5);
-            transition: background-color 0.3s;
+            /* Removed transition for static feel */
         }
         .stab-green { background-color: #22c55e; }
         .stab-yellow { background-color: #eab308; }
         .stab-red { background-color: #ef4444; }
-        .stab-empty { background-color: #4b5563; }
+        .stab-empty { background-color: #262626; } /* Neutral Dark Gray */
 
         /* Eval Bar */
         .eval-bar-container {
@@ -593,7 +593,11 @@
             const turn = game.turn(); // 'w' or 'b'
             const indicator = document.getElementById('turnIndicatorIcon');
             if(indicator) {
-                indicator.className = `turn-indicator-dot ${turn === 'w' ? 'bg-white' : 'bg-black'}`;
+                // Remove bg/border classes if any, set style directly for precision
+                indicator.style.backgroundColor = turn === 'w' ? '#FFFFFF' : '#000000';
+                indicator.style.borderColor = turn === 'w' ? '#000000' : '#FFFFFF';
+                indicator.style.borderWidth = '2px';
+                indicator.style.borderStyle = 'solid';
             }
 
             // 2. Hybrid Data Retrieval
@@ -1465,30 +1469,35 @@
                 else { if(s < bestScore) bestScore = s; }
             }
 
-            let segments = [];
+            let rawSegments = [];
 
-            for(let i=0; i<10; i++) {
-                if (i < lines.length) {
-                    const l = lines[i];
-                    const s = getScore(l);
+            for(let i=0; i<lines.length; i++) {
+                const l = lines[i];
+                const s = getScore(l);
 
-                    // Calculate "Distance from Best"
-                    // If White: Diff = Best - Move. (e.g. 500 - 450 = 50).
-                    // If Black: Diff = Move - Best. (e.g. -450 - (-500) = 50).
-                    let diffCp = (turn === 'w') ? (bestScore - s) : (s - bestScore);
+                // Calculate "Distance from Best"
+                let diffCp = (turn === 'w') ? (bestScore - s) : (s - bestScore);
+                if (diffCp < 0) diffCp = 0;
+                const diffPawns = diffCp / 100.0;
 
-                    if (diffCp < 0) diffCp = 0;
-
-                    const diffPawns = diffCp / 100.0;
-
-                    if (diffPawns < 0.5) segments.push('green');
-                    else if (diffPawns <= 2.0) segments.push('yellow');
-                    else segments.push('red');
-                } else {
-                    segments.push('empty');
-                }
+                if (diffPawns < 0.5) rawSegments.push('green');
+                else if (diffPawns <= 2.0) rawSegments.push('yellow');
+                else rawSegments.push('red');
             }
-            return segments;
+
+            // SORTING LOGIC: Green (Best) -> Yellow -> Red -> Empty
+            // Precedence map: green=1, yellow=2, red=3
+            const precedence = { 'green': 1, 'yellow': 2, 'red': 3 };
+
+            rawSegments.sort((a, b) => precedence[a] - precedence[b]);
+
+            // Fill remainder with empty
+            while (rawSegments.length < 10) {
+                rawSegments.push('empty');
+            }
+
+            // Limit to 10 just in case
+            return rawSegments.slice(0, 10);
         }
 
         // --- LIVE ANALYSIS HELPER ---
@@ -1508,15 +1517,9 @@
             stockfish.postMessage('go multipv 10');
 
             // Temporary override for live updates
-            const originalOnMessage = stockfish.onmessage;
+            // Use throttling to prevent flickering
+            let lastUpdate = 0;
             let liveLines = [];
-
-            // We need to restore the original listener if user navigates away or starts review
-            // For now, we just hook into the existing listener if possible,
-            // but since runStockfish adds its own, we need to be careful.
-            // runStockfish adds listener and removes it on finish.
-            // So we can safely add a persistent listener for live analysis here?
-            // Actually, stockfish.js usually supports one onmessage.
 
             // Let's use addEventListener instead of onmessage property to avoid conflict
             const liveListener = (e) => {
@@ -1542,9 +1545,12 @@
                             type: matchScore[1]
                         };
 
-                        if (liveLines.length > 0) {
+                        // THROTTLE UPDATES (2 Seconds)
+                        const now = Date.now();
+                        if (liveLines.length > 0 && (now - lastUpdate > 2000)) {
                              const segs = calculateStabilitySegments(liveLines, turn);
                              renderStabilitySegments(segs);
+                             lastUpdate = now;
                         }
                     }
                 }
