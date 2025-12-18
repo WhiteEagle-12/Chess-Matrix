@@ -60,6 +60,7 @@
         .stability-bar-container {
             flex: 0 0 14px;
             width: 14px;
+            height: 100%; /* Locked geometry */
             background-color: #374151;
             border-radius: 4px;
             overflow: visible; /* Modified to allow indicator to sit on top */
@@ -80,7 +81,7 @@
         }
         .turn-indicator-dot {
             position: absolute;
-            top: -8px; /* Lifted up slightly */
+            top: -14px; /* Lifted higher to avoid overlap */
             left: 50%;
             transform: translateX(-50%);
             width: 10px; /* Slightly larger */
@@ -89,7 +90,7 @@
             /* Border and Bg set by JS */
             z-index: 20;
             box-shadow: 0 1px 2px rgba(0,0,0,0.5);
-            /* Removed transition for static feel */
+            transition: none; /* Instant snap */
         }
         .stab-green { background-color: #22c55e; }
         .stab-yellow { background-color: #eab308; }
@@ -634,7 +635,18 @@
             container.innerHTML = '';
             if(indicator) container.appendChild(indicator);
 
-            segments.forEach(color => {
+            // SORTING LOGIC: Green (Best) > Yellow > Red > Empty
+            // Precedence map: green=1, yellow=2, red=3, empty=4
+            const precedence = { 'green': 1, 'yellow': 2, 'red': 3, 'empty': 4 };
+
+            // Clone to avoid mutating original if needed, though safe here
+            const sortedSegments = [...segments].sort((a, b) => {
+                const pA = precedence[a] || 5;
+                const pB = precedence[b] || 5;
+                return pA - pB;
+            });
+
+            sortedSegments.forEach(color => {
                 const div = document.createElement('div');
                 div.className = `stability-segment stab-${color}`;
                 container.appendChild(div);
@@ -1451,7 +1463,11 @@
             // lines: Array of { rawScore: number, type: 'cp'|'mate', ... }
             // turn: 'w' or 'b'
 
-            if (!lines || lines.length === 0) return Array(10).fill('empty');
+            if (!lines) return Array(10).fill('empty');
+
+            // Fix for sparse data (holes) from live engine
+            const validLines = lines.filter(Boolean);
+            if (validLines.length === 0) return Array(10).fill('empty');
 
             const getScore = (l) => {
                 if (l.type === 'mate') {
@@ -1461,9 +1477,9 @@
                 return l.rawScore; // Centipawns
             };
 
-            // Find the Best Score among lines
-            let bestScore = getScore(lines[0]);
-            for(let l of lines) {
+            // Find the Best Score among valid lines
+            let bestScore = getScore(validLines[0]);
+            for(let l of validLines) {
                 const s = getScore(l);
                 if (turn === 'w') { if(s > bestScore) bestScore = s; }
                 else { if(s < bestScore) bestScore = s; }
@@ -1471,8 +1487,8 @@
 
             let rawSegments = [];
 
-            for(let i=0; i<lines.length; i++) {
-                const l = lines[i];
+            for(let i=0; i<validLines.length; i++) {
+                const l = validLines[i];
                 const s = getScore(l);
 
                 // Calculate "Distance from Best"
@@ -1485,11 +1501,7 @@
                 else rawSegments.push('red');
             }
 
-            // SORTING LOGIC: Green (Best) -> Yellow -> Red -> Empty
-            // Precedence map: green=1, yellow=2, red=3
-            const precedence = { 'green': 1, 'yellow': 2, 'red': 3 };
-
-            rawSegments.sort((a, b) => precedence[a] - precedence[b]);
+            // NO SORTING HERE - Sorting moved to Renderer (Single Source of Truth)
 
             // Fill remainder with empty
             while (rawSegments.length < 10) {
