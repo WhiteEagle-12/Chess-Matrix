@@ -1507,23 +1507,26 @@
         };
 
         function liveAnalyzeCurrentPosition() {
+            // 1. Safety Checks: Don't run if analyzing a full game or engine isn't ready
             if (isAnalyzing || !stockfish) return;
 
             const fen = game.fen();
             const turn = game.turn();
 
+            // 2. Reset Engine for Live Analysis
             stockfish.postMessage('stop');
             stockfish.postMessage('position fen ' + fen);
-            stockfish.postMessage('go multipv 10');
+            stockfish.postMessage('go multipv 10'); // Ask for 10 lines
 
-            // Temporary override for live updates
-            // Use throttling to prevent flickering
             let lastUpdate = 0;
             let liveLines = [];
 
-            // Let's use addEventListener instead of onmessage property to avoid conflict
+            // 3. Clean up old listeners to prevent memory leaks/duplicate updates
+            if (window._currentLiveListener) {
+                stockfish.removeEventListener('message', window._currentLiveListener);
+            }
+
             const liveListener = (e) => {
-                // If isAnalyzing became true, stop listening
                 if (isAnalyzing) {
                     stockfish.removeEventListener('message', liveListener);
                     return;
@@ -1531,6 +1534,7 @@
 
                 const l = e.data;
 
+                // 4. Parse Engine Output
                 if (l.startsWith('info') && l.includes('multipv') && l.includes('score')) {
                     const matchPv = l.match(/multipv (\d+)/);
                     const matchScore = l.match(/score (cp|mate) (-?\d+)/);
@@ -1540,14 +1544,21 @@
                         let rawVal = parseInt(matchScore[2]);
                         let absScore = (fen.includes(' b ') ? -rawVal : rawVal);
 
+                        // Store the line data
                         liveLines[idx] = {
                             rawScore: absScore,
                             type: matchScore[1]
                         };
 
-                        // THROTTLE UPDATES (2 Seconds)
+                        // 5. THE FIX: Smart Throttling
                         const now = Date.now();
-                        if (liveLines.length > 0 && (now - lastUpdate > 2000)) {
+                        // Count how many valid lines we actually have
+                        const validLineCount = liveLines.filter(line => line).length;
+
+                        // Only render if:
+                        // A. We have at least 4 lines (Prevents the "Black Bar" flash)
+                        // B. AND 1 second has passed since the last render (Prevents flickering)
+                        if (validLineCount >= 4 && (now - lastUpdate > 1000)) {
                              const segs = calculateStabilitySegments(liveLines, turn);
                              renderStabilitySegments(segs);
                              lastUpdate = now;
@@ -1555,15 +1566,10 @@
                     }
                 }
             };
-            stockfish.addEventListener('message', liveListener);
 
-            // Clean up previous listener if we stored it?
-            // Since we use addEventListener, we might accumulate listeners if we call this often.
-            // We should ideally remove the previous one.
-            if (window._currentLiveListener) {
-                stockfish.removeEventListener('message', window._currentLiveListener);
-            }
             window._currentLiveListener = liveListener;
+
+            stockfish.addEventListener('message', liveListener);
         }
 
         // --- 9. HELPERS ---
