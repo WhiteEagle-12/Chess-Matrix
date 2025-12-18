@@ -56,6 +56,32 @@
         .square-control-b-2 { box-shadow: inset 0 0 0 1000px rgba(239, 68, 68, 0.4); }
         .square-control-b-3 { box-shadow: inset 0 0 0 1000px rgba(185, 28, 28, 0.6); }
 
+        /* Stability Bar */
+        .stability-bar-container {
+            flex: 0 0 14px;
+            width: 14px;
+            background-color: #374151;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-right: 4px;
+            display: flex;
+            flex-direction: column-reverse;
+            gap: 1px;
+            padding: 1px;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
+            z-index: 5;
+        }
+        .stability-segment {
+            flex: 1;
+            width: 100%;
+            border-radius: 1px;
+            transition: background-color 0.3s;
+        }
+        .stab-green { background-color: #22c55e; }
+        .stab-yellow { background-color: #eab308; }
+        .stab-red { background-color: #ef4444; }
+        .stab-empty { background-color: #4b5563; }
+
         /* Eval Bar */
         .eval-bar-container {
             flex: 0 0 24px;
@@ -235,6 +261,7 @@
         </div>
 
         <div class="relative board-container">
+            <div id="stabilityBar" class="stability-bar-container"></div>
             <div class="eval-bar-container">
                 <div class="eval-score-text" id="evalBarTextTop"></div>
                 <div id="visualEvalBar" class="eval-bar-fill" style="height: 50%;"></div>
@@ -471,7 +498,7 @@
                 stockfish = new Worker(URL.createObjectURL(blob));
                 stockfish.postMessage('uci');
                 stockfish.postMessage('setoption name UCI_ShowWDL value true');
-                stockfish.postMessage('setoption name MultiPV value 2');
+                stockfish.postMessage('setoption name MultiPV value 10');
             } catch (e) {
                 console.error("Stockfish init failed:", e);
             }
@@ -538,6 +565,26 @@
 
             updateCoachBox();
             updateEvalBar();
+            updateStabilityBar();
+        }
+
+        function updateStabilityBar() {
+            const container = document.getElementById('stabilityBar');
+            if (!container) return;
+            container.innerHTML = '';
+
+            let segments = Array(10).fill('empty');
+
+            if (currentMoveIndex >= 0 && analysisData[currentMoveIndex]) {
+                const data = analysisData[currentMoveIndex];
+                if (data.stability) segments = data.stability;
+            }
+
+            segments.forEach(color => {
+                const div = document.createElement('div');
+                div.className = `stability-segment stab-${color}`;
+                container.appendChild(div);
+            });
         }
 
         function highlightLastMove() {
@@ -1006,29 +1053,60 @@
                     const preMoveResult = await runStockfish(fenBefore);
                     let scoreBefore = parseEvalToNumber(preMoveResult.eval);
                     
-                    // Critical Moment Detection (MultiPV)
+                    // --- STABILITY & CRITICAL MOMENT LOGIC ---
                     let isCritical = false;
-                    if (preMoveResult.lines && preMoveResult.lines.length >= 2) {
-                        const l1 = preMoveResult.lines[0];
-                        const l2 = preMoveResult.lines[1];
+                    let stabilityData = [];
 
-                        // Helper to get numeric score for gap calculation (handle Mate)
-                        const getGapScore = (line) => {
-                            if (line.type === 'mate') {
-                                // +/- 10000 for mate
-                                return (line.rawScore > 0) ? 10000 : -10000;
-                            }
-                            return line.rawScore; // Centipawns
-                        };
-
-                        const s1 = getGapScore(l1);
-                        const s2 = getGapScore(l2);
-                        const gap = Math.abs(s1 - s2);
-
-                        // Threshold: 150 centipawns (1.5 pawns)
-                        if (gap > 150) {
-                            isCritical = true;
+                    // Helper to get numeric score for gap calculation (handle Mate)
+                    const getGapScore = (line) => {
+                        if (line.type === 'mate') {
+                            // +/- 10000 for mate
+                            return (line.rawScore > 0) ? 10000 : -10000;
                         }
+                        return line.rawScore; // Centipawns
+                    };
+
+                    if (preMoveResult.lines && preMoveResult.lines.length > 0) {
+                        // 1. Calculate Criticality (Hero Moment)
+                        if (preMoveResult.lines.length >= 2) {
+                            const l1 = preMoveResult.lines[0];
+                            const l2 = preMoveResult.lines[1];
+                            const s1 = getGapScore(l1);
+                            const s2 = getGapScore(l2);
+                            if (Math.abs(s1 - s2) > 150) isCritical = true;
+                        }
+
+                        // 2. Calculate Stability Segments
+                        const bestLine = preMoveResult.lines[0];
+                        const bestScore = getGapScore(bestLine);
+
+                        // We need 10 segments total
+                        for(let k=0; k<10; k++) {
+                            if (k < preMoveResult.lines.length) {
+                                const line = preMoveResult.lines[k];
+                                const currentScore = getGapScore(line);
+                                // Calculate distance in Centipawns (converted to pawns for logic)
+                                // Note: scores are absolute (white positive, black negative).
+                                // We need "Difference from Best".
+                                // If White to move, Best is Max. Diff = Best - Current.
+                                // If Black to move, Best is Min. Diff = Current - Best (or Abs(Best - Current)).
+
+                                const turn = tempGame.turn();
+                                const diffCp = (turn === 'w') ? (bestScore - currentScore) : (currentScore - bestScore);
+                                const diff = Math.max(0, diffCp / 100.0); // Convert to pawns
+
+                                let color = "red";
+                                if (diff < 0.5) color = "green";
+                                else if (diff <= 2.0) color = "yellow";
+
+                                stabilityData.push(color);
+                            } else {
+                                stabilityData.push("empty"); // Fewer than 10 legal moves
+                            }
+                        }
+                    } else {
+                        // Fallback if no lines
+                        stabilityData = Array(10).fill("empty");
                     }
 
                     // Handle Tablebase "Truth"
@@ -1164,6 +1242,7 @@
                         control: calculateControl(tempGame),
                         isMate: isMate,
                         isCritical: isCritical,
+                        stability: stabilityData,
                         stats: { user: userMoveStats, best: bestMoveStats },
                         materialStatus: materialMsg
                     });
@@ -1179,6 +1258,7 @@
                 let blackLoss = 0, blackMoves = 0;
                 let whiteBlunders = 0, blackBlunders = 0;
                 let complexitySum = 0;
+                let stabilitySum = 0;
                 let prevEval = 0;
 
                 const ACPL_MAP = {
@@ -1187,6 +1267,11 @@
                 };
 
                 analysisData.forEach(d => {
+                    // Stability
+                    if (d.stability) {
+                        stabilitySum += d.stability.filter(s => s === 'green').length;
+                    }
+
                     // ACPL
                     const loss = ACPL_MAP[d.classification] || 0;
                     if (d.color === 'w') {
@@ -1221,6 +1306,8 @@
                 let complexityScore = (rawComp * 2.5).toFixed(1);
                 if (complexityScore > 5.0) complexityScore = "5.0";
 
+                let avgStability = (stabilitySum / (analysisData.length || 1)).toFixed(1);
+
                 const whiteAcc = calculateAccuracy(whiteAcpl);
                 const blackAcc = calculateAccuracy(blackAcpl);
 
@@ -1232,6 +1319,7 @@
                     white: { acpl: whiteAcpl, accuracy: whiteAcc, archetype: whiteArch },
                     black: { acpl: blackAcpl, accuracy: blackAcc, archetype: blackArch },
                     complexity: complexityScore,
+                    avgStability: avgStability,
                     // Legacy support for summary card (can be removed later if card is updated)
                     accuracyLabel: whiteAcc + "% vs " + blackAcc + "%",
                     acpl: whiteAcpl,
@@ -1387,6 +1475,15 @@
                     </div>`;
                 }
 
+                // Calculate Stability Badge
+                let stabBadge = "";
+                if (g.gameStats && g.gameStats.avgStability) {
+                    const s = parseFloat(g.gameStats.avgStability);
+                    if (s > 7) stabBadge = `<span class="flex items-center gap-1 text-[9px] font-bold text-gray-500 uppercase"><div class="w-2 h-2 rounded-full bg-green-500"></div> Solid</span>`;
+                    else if (s >= 4) stabBadge = `<span class="flex items-center gap-1 text-[9px] font-bold text-gray-500 uppercase"><div class="w-2 h-2 rounded-full bg-yellow-500"></div> Tactical</span>`;
+                    else stabBadge = `<span class="flex items-center gap-1 text-[9px] font-bold text-gray-500 uppercase"><div class="w-2 h-2 rounded-full bg-red-500"></div> Volatile</span>`;
+                }
+
                 return `
                 <div onclick="loadGameFromLibrary('${g.id}')" class="bg-white p-3 rounded-lg shadow-sm border border-gray-200 hover:border-indigo-300 hover:shadow-md cursor-pointer transition-all relative group">
                     <div class="flex justify-between items-start mb-1">
@@ -1395,8 +1492,11 @@
                     </div>
                     <div class="font-bold text-gray-800 text-sm mb-2 truncate leading-tight">${g.opening || 'Unknown Opening'}</div>
                     <div class="flex justify-between items-center border-t border-gray-100 pt-2">
-                         <div class="text-[10px] font-bold px-2 py-1 rounded bg-purple-50 text-purple-700 border border-purple-100">
-                            Chaos: ${g.gameStats ? g.gameStats.complexity : '?'}
+                         <div class="flex gap-2">
+                            <div class="text-[10px] font-bold px-2 py-1 rounded bg-purple-50 text-purple-700 border border-purple-100">
+                                Chaos: ${g.gameStats ? g.gameStats.complexity : '?'}
+                            </div>
+                            ${stabBadge}
                          </div>
                          <div class="text-indigo-400 group-hover:text-indigo-600 transition-colors"><i class="fa-solid fa-chevron-right text-xs"></i></div>
                     </div>
@@ -1696,7 +1796,12 @@
                     if (scoreNum < -3.0) stateLabel = "Black Winning";
                     if (d.eval.toString().includes("M")) stateLabel = "Forced Mate Detected";
 
-                    const stats = `[Eval: ${d.eval} (${stateLabel})] [Class: ${d.classification}]`;
+                    // Calculate Stability Count
+                    let stabilityCount = 0;
+                    if (d.stability) {
+                        stabilityCount = d.stability.filter(s => s === 'green').length;
+                    }
+                    const stats = `[Eval: ${d.eval} (${stateLabel})] [Class: ${d.classification}] [Stability: ${stabilityCount}/10]`;
                     
                     let comparison = "";
                     if (d.stats && d.stats.best) {
@@ -1762,6 +1867,14 @@
             - **Opening:** Be educational. Mention the opening goals.
             - **Endgame:** If the game is "Winning" or "Lost" (Eval > 3 or < -3), stop nitpicking small inaccuracies.
             
+            **STABILITY CONTEXT (NEW):**
+            Each move includes a [Stability: X/10] tag, representing the number of "safe" alternative moves.
+            - **Fragile Position (Stability <= 2):**
+              - If Eval is near 0.00: Use vocabulary like "Walking a tightrope," "One wrong step and it collapses," "High-stakes precision needed."
+              - If User is Winning (> +3): Warning! "Don't get complacent," "The position is sharper than it looks," "One slip gives it away."
+            - **Solid Position (Stability >= 7):** Position is robust. "Plenty of good options," "Flexible structure."
+            - **Archetype Focus:** "The Magician" loves low stability (Chaos). "The Solid Pro" hates it. Adjust your voice accordingly.
+
             **OUTPUT RULES (STRICT):**
             1. **Context, Not Labels:** Do NOT repeat the technical tags (like 'win material or a free capture') verbatim in the response. Use them as the *reason* for your advice.
             2. **Varied Vocabulary:** Avoid repetitive phrases. If the tag is [OPPORTUNITY], vary it: 'You left a gift on the table,' 'Tactical oversight regarding the knight,' etc.
