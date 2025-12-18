@@ -1479,7 +1479,7 @@
                 let stabBadge = "";
                 if (g.gameStats && g.gameStats.avgStability) {
                     const s = parseFloat(g.gameStats.avgStability);
-                    if (s > 7) stabBadge = `<span class="flex items-center gap-1 text-[9px] font-bold text-gray-500 uppercase"><div class="w-2 h-2 rounded-full bg-green-500"></div> Solid</span>`;
+                    if (s >= 7) stabBadge = `<span class="flex items-center gap-1 text-[9px] font-bold text-gray-500 uppercase"><div class="w-2 h-2 rounded-full bg-green-500"></div> Solid</span>`;
                     else if (s >= 4) stabBadge = `<span class="flex items-center gap-1 text-[9px] font-bold text-gray-500 uppercase"><div class="w-2 h-2 rounded-full bg-yellow-500"></div> Tactical</span>`;
                     else stabBadge = `<span class="flex items-center gap-1 text-[9px] font-bold text-gray-500 uppercase"><div class="w-2 h-2 rounded-full bg-red-500"></div> Volatile</span>`;
                 }
