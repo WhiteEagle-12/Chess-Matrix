@@ -417,17 +417,13 @@
         <div class="bg-white p-6 rounded-lg shadow-xl w-11/12 max-w-sm">
             <h2 class="text-lg font-bold mb-4">Settings</h2>
             <div class="mb-4">
-                <label class="block text-xs font-bold text-gray-600 mb-1">Chess.com Username</label>
-                <input type="text" id="usernameInput" placeholder="e.g. Hikaru" class="w-full border p-2 rounded text-sm">
-            </div>
-            <div class="mb-4">
                 <label class="block text-xs font-bold text-gray-600 mb-1">Gemini API Key</label>
                 <input type="password" id="apiKeyInput" placeholder="Paste key here..." class="w-full border p-2 rounded text-sm">
                 <p class="text-xs text-gray-400 mt-1">Key is saved in browser storage.</p>
             </div>
             <div class="flex justify-end gap-2">
                 <button onclick="document.getElementById('settingsModal').classList.add('hidden')" class="px-4 py-2 text-gray-600 text-sm">Close</button>
-                <button id="saveKeyBtn" onclick="saveSettings()" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm font-bold">Save Settings</button>
+                <button id="saveKeyBtn" onclick="saveSettings()" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm font-bold">Save Key</button>
             </div>
         </div>
     </div>
@@ -540,22 +536,10 @@
                     game.load_pgn(pgn) || game.load_pgn(pgn.replace(/\{.*?\}/g, '')) || game.load_pgn(pgn.replace(/\[.*?\]/g, ""));
                     
                     gameHistory = game.history({ verbose: true });
-
-                    // --- AUTO ORIENTATION ---
-                    const headers = game.header();
-                    const username = localStorage.getItem('chess_username');
-                    let orient = 'white';
-
-                    if (username && headers) {
-                        const userLower = username.toLowerCase();
-                        if (headers['White'] && headers['White'].toLowerCase() === userLower) orient = 'white';
-                        else if (headers['Black'] && headers['Black'].toLowerCase() === userLower) orient = 'black';
-                    }
-
                     game.reset();
                     currentMoveIndex = -1;
                     board.position(game.fen());
-                    board.orientation(orient);
+                    board.orientation('white'); 
                     
                     analysisData = [];
                     geminiComments = {};
@@ -2303,25 +2287,8 @@ ${log}
             } catch(e) { hist.innerHTML += `<div class="text-red-500">Error.</div>`; }
         }
         function handleChatEnter(e) { if(e.key === 'Enter') sendChatMessage(); }
-
-        function loadSettings() {
-            const key = localStorage.getItem('gemini_api_key');
-            const user = localStorage.getItem('chess_username');
-            if(key) document.getElementById('apiKeyInput').value = key;
-            if(user) document.getElementById('usernameInput').value = user;
-        }
-
-        function saveSettings() {
-            localStorage.setItem('gemini_api_key', document.getElementById('apiKeyInput').value);
-            localStorage.setItem('chess_username', document.getElementById('usernameInput').value.trim());
-            document.getElementById('settingsModal').classList.add('hidden');
-        }
-
-        function openSettings() {
-            loadSettings();
-            document.getElementById('settingsModal').classList.remove('hidden');
-        }
-
+        function saveSettings() { localStorage.setItem('gemini_api_key', document.getElementById('apiKeyInput').value); document.getElementById('settingsModal').classList.add('hidden'); }
+        function openSettings() { document.getElementById('apiKeyInput').value = localStorage.getItem('gemini_api_key')||''; document.getElementById('settingsModal').classList.remove('hidden'); }
         function cancelAnalysis() { isAnalyzing = false; document.getElementById('analysisOverlay').classList.add('hidden'); document.getElementById('analyzeBtn').disabled = false; }
         
         function copyAnalysisToClipboard() {
