@@ -1562,6 +1562,11 @@
 
             let lastUpdate = 0;
             let liveLines = [];
+            let hasShownFullBar = false;
+
+            // Calculate expected lines (legal moves capped at 10)
+            const legalMovesCount = game.moves().length;
+            const targetLines = Math.min(10, legalMovesCount);
 
             // 3. Clean up old listeners to prevent memory leaks/duplicate updates
             if (window._currentLiveListener) {
@@ -1594,13 +1599,21 @@
 
                         // 5. THE FIX: Smart Throttling
                         const now = Date.now();
-                        // Count how many valid lines we actually have
                         const validLineCount = liveLines.filter(line => line).length;
 
-                        // Only render if:
-                        // A. We have at least 4 lines (Prevents the "Black Bar" flash)
-                        // B. AND 1 second has passed since the last render (Prevents flickering)
-                        if (validLineCount >= 4 && (now - lastUpdate > 1000)) {
+                        let shouldRender = false;
+
+                        // Case 1: Target reached for the first time -> Render Immediately
+                        if (validLineCount >= targetLines && !hasShownFullBar) {
+                            shouldRender = true;
+                            hasShownFullBar = true;
+                        }
+                        // Case 2: Standard Throttle (Wait 1s, but show partials if we have enough data)
+                        else if (validLineCount >= Math.min(4, targetLines) && (now - lastUpdate > 1000)) {
+                             shouldRender = true;
+                        }
+
+                        if (shouldRender) {
                              const segs = calculateStabilitySegments(liveLines, turn);
                              renderStabilitySegments(segs);
                              lastUpdate = now;
