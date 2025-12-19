@@ -98,8 +98,8 @@
 
         /* Eval Bar */
         .eval-bar-container {
-            flex: 0 0 24px;
-            width: 24px;
+            flex: 0 0 26px;
+            width: 26px;
             background-color: #374151;
             border-radius: 4px;
             overflow: hidden;
@@ -127,6 +127,7 @@
             top: 4px;
             pointer-events: none;
             text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+            white-space: nowrap;
         }
         .eval-score-text.bottom { top: auto; bottom: 4px; color: #ccc; }
         
@@ -753,9 +754,18 @@
         function updateEvalBar() {
             let evalVal = 0.00;
             let wdlText = "";
+            const barContainer = document.querySelector('.eval-bar-container');
             const barFill = document.getElementById('visualEvalBar');
             const evalTextEl = document.getElementById('evalText');
             const wdlEl = document.getElementById('wdlText');
+            const textTop = document.getElementById('evalBarTextTop');
+            const textBottom = document.getElementById('evalBarTextBottom');
+
+            // 1. Handle Orientation
+            const isFlipped = board && board.orientation() === 'black';
+            if (barContainer) {
+                barContainer.style.flexDirection = isFlipped ? 'column' : 'column-reverse';
+            }
             
             if (currentMoveIndex >= 0 && analysisData[currentMoveIndex]) {
                 const data = analysisData[currentMoveIndex];
@@ -765,7 +775,8 @@
                     evalTextEl.innerText = `M${Math.abs(mateIn)}`;
                 } else {
                     evalVal = parseFloat(data.eval);
-                    evalTextEl.innerText = Math.abs(evalVal).toFixed(2);
+                    const prefix = evalVal > 0 ? "+" : "";
+                    evalTextEl.innerText = prefix + evalVal.toFixed(2);
                 }
                 if(data.wdl) {
                     const winP = (data.wdl[0] / 10).toFixed(0);
@@ -778,9 +789,40 @@
                 evalVal = 0.3;
                 wdlEl.classList.add('hidden');
             }
+
+            // 2. Calculate Fill
             const percentage = 50 + (Math.max(-5, Math.min(5, evalVal)) * 10); 
             barFill.style.height = `${percentage}%`;
             evalTextEl.style.color = percentage > 90 ? '#333' : (percentage < 10 ? '#fff' : '#999');
+
+            // 3. Internal Bar Text Logic
+            if (textTop && textBottom) {
+                textTop.innerText = "";
+                textBottom.innerText = "";
+
+                let scoreStr = evalTextEl.innerText;
+                let targetEl = null;
+                let textColor = "";
+
+                if (evalVal >= 0) {
+                     // White Winning -> Text on White Area
+                     // If Flipped (White Top): Text Top
+                     // If Standard (White Bottom): Text Bottom
+                     targetEl = isFlipped ? textTop : textBottom;
+                     textColor = "#4b5563"; // Dark Gray on White
+                } else {
+                     // Black Winning -> Text on Black Area
+                     // If Flipped (Black Bottom): Text Bottom
+                     // If Standard (Black Top): Text Top
+                     targetEl = isFlipped ? textBottom : textTop;
+                     textColor = "#d1d5db"; // Light Gray on Dark
+                }
+
+                if (Math.abs(evalVal) > 0.1 || scoreStr.includes('M')) {
+                     targetEl.innerText = scoreStr;
+                     targetEl.style.color = textColor;
+                }
+            }
         }
 
         function renderHeatmap() {
